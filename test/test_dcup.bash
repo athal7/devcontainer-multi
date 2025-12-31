@@ -121,6 +121,185 @@ test_dcup_no_open_flag_works() {
   return 0
 }
 
+test_dcup_override_sets_correct_workspace_folder() {
+  # Regression test: when using a branch clone, the override config must set
+  # workspaceFolder to match the actual clone directory name, not the original
+  # repo's hardcoded workspaceFolder value
+  
+  # Create a devcontainer.json with explicit workspaceFolder (like real projects have)
+  cat > "$TEST_REPO/.devcontainer/devcontainer.json" << 'EOF'
+{
+  "name": "Test Container",
+  "image": "node:18",
+  "workspaceFolder": "/workspaces/test-repo",
+  "forwardPorts": [3000]
+}
+EOF
+  git -C "$TEST_REPO" add -A
+  git -C "$TEST_REPO" commit -q -m "Add workspaceFolder"
+  
+  cd "$TEST_REPO"
+  
+  # Create a branch
+  git checkout -q -b feature-xyz
+  git checkout -q main 2>/dev/null || git checkout -q master
+  
+  # Run dcup for the branch (will fail at devcontainer up, but creates override)
+  "$BIN_DIR/dcup" feature-xyz --no-open 2>&1 || true
+  
+  # Find the override file and verify workspaceFolder is correct
+  local override_file=$(ls "$TEST_CACHE_DIR/overrides"/*.json 2>/dev/null | head -1)
+  if [[ -z "$override_file" ]]; then
+    echo "Override file not created"
+    return 1
+  fi
+  
+  local workspace_folder=$(jq -r '.workspaceFolder' "$override_file")
+  if [[ "$workspace_folder" != "/workspaces/feature-xyz" ]]; then
+    echo "Expected workspaceFolder '/workspaces/feature-xyz', got '$workspace_folder'"
+    return 1
+  fi
+  return 0
+}
+
+test_dcup_copies_gitignored_files_to_clone() {
+  # When creating a clone for a branch, files that exist locally but are
+  # gitignored should be copied so the app can run (secrets, local config, etc.)
+  # Directories with many files (>100) are skipped as they're likely dependencies.
+  
+  cd "$TEST_REPO"
+  
+  # Add gitignore patterns
+  cat > .gitignore << 'EOF'
+config/master.key
+config/credentials/*.key
+.env*
+!.env.example
+secrets/
+node_modules/
+vendor/
+storage/
+package-lock.json
+yarn.lock
+Gemfile.lock
+EOF
+  git add .gitignore
+  git commit -q -m "Add gitignore"
+  
+  # Create files that match gitignore patterns (these won't be in the clone)
+  mkdir -p config/credentials secrets
+  echo "master-key-content" > config/master.key
+  echo "dev-key-content" > config/credentials/development.key
+  echo "prod-key-content" > config/credentials/production.key
+  echo "ENV_VAR=secret" > .env
+  echo "LOCAL_VAR=local" > .env.local
+  echo "top-secret" > secrets/api_key.txt
+  
+  # Create dependency directories with many files (should NOT be copied)
+  mkdir -p node_modules vendor/bundle storage/uploads
+  for i in $(seq 1 15); do
+    echo "file$i" > "node_modules/file$i.js"
+    echo "file$i" > "vendor/bundle/file$i.rb"
+    echo "file$i" > "storage/uploads/file$i.txt"
+  done
+  
+  # Create lock files that should NOT be copied (generated, cause conflicts)
+  echo "lock-content" > package-lock.json
+  echo "lock-content" > yarn.lock
+  echo "lock-content" > Gemfile.lock
+  
+  # Create a file that matches an exclusion pattern (should NOT be copied)
+  echo "example" > .env.example
+  git add .env.example
+  git commit -q -m "Add env example"
+  
+  # Create a tracked file (should NOT be copied since it's in git)
+  echo "tracked" > config/database.yml
+  git add config/database.yml
+  git commit -q -m "Add database config"
+  
+  # Create a branch
+  git checkout -q -b feature-secrets
+  git checkout -q main 2>/dev/null || git checkout -q master
+  
+  # Run dcup for the branch
+  local output=$("$BIN_DIR/dcup" feature-secrets --no-open 2>&1 || true)
+  
+  # Verify gitignored files were copied
+  local clone_dir="$TEST_CLONES_DIR/test-repo/feature-secrets"
+  
+  if [[ ! -f "$clone_dir/config/master.key" ]]; then
+    echo "config/master.key was not copied to clone"
+    return 1
+  fi
+  
+  if [[ ! -f "$clone_dir/config/credentials/development.key" ]]; then
+    echo "config/credentials/development.key was not copied to clone"
+    return 1
+  fi
+  
+  if [[ ! -f "$clone_dir/config/credentials/production.key" ]]; then
+    echo "config/credentials/production.key was not copied to clone"
+    return 1
+  fi
+  
+  if [[ ! -f "$clone_dir/.env" ]]; then
+    echo ".env was not copied to clone"
+    return 1
+  fi
+  
+  if [[ ! -f "$clone_dir/.env.local" ]]; then
+    echo ".env.local was not copied to clone"
+    return 1
+  fi
+  
+  if [[ ! -f "$clone_dir/secrets/api_key.txt" ]]; then
+    echo "secrets/api_key.txt was not copied to clone"
+    return 1
+  fi
+  
+  # Verify files from high-file-count directories were NOT copied
+  if [[ -f "$clone_dir/node_modules/file1.js" ]]; then
+    echo "node_modules files should not be copied (too many files)"
+    return 1
+  fi
+  
+  if [[ -f "$clone_dir/vendor/bundle/file1.rb" ]]; then
+    echo "vendor files should not be copied (too many files)"
+    return 1
+  fi
+  
+  if [[ -f "$clone_dir/storage/uploads/file1.txt" ]]; then
+    echo "storage files should not be copied (too many files)"
+    return 1
+  fi
+  
+  # Verify lock files were NOT copied (generated files, cause conflicts)
+  if [[ -f "$clone_dir/package-lock.json" ]]; then
+    echo "package-lock.json should not be copied"
+    return 1
+  fi
+  
+  if [[ -f "$clone_dir/yarn.lock" ]]; then
+    echo "yarn.lock should not be copied"
+    return 1
+  fi
+  
+  if [[ -f "$clone_dir/Gemfile.lock" ]]; then
+    echo "Gemfile.lock should not be copied"
+    return 1
+  fi
+  
+  # Verify content is correct
+  if [[ "$(cat "$clone_dir/config/master.key")" != "master-key-content" ]]; then
+    echo "master.key content mismatch"
+    return 1
+  fi
+  
+  assert_contains "$output" "Copied"
+  return 0
+}
+
 # =============================================================================
 # Run Tests
 # =============================================================================
@@ -135,7 +314,9 @@ for test_func in \
   test_dcup_detects_workspace \
   test_dcup_assigns_port \
   test_dcup_creates_clone_for_branch \
-  test_dcup_no_open_flag_works
+  test_dcup_no_open_flag_works \
+  test_dcup_override_sets_correct_workspace_folder \
+  test_dcup_copies_gitignored_files_to_clone
 do
   setup
   run_test "${test_func#test_}" "$test_func"

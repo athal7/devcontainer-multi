@@ -116,6 +116,82 @@ REPO_NAME=$(basename "$REPO_ROOT")
 REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
 
 # Determine workspace directory
+# Copy gitignored files from source repo to clone
+# These files (secrets, local config, etc.) are needed for the app to run but aren't in git
+# Skips directories with many gitignored files (dependencies) and large files
+copy_gitignored_files() {
+  local src="$1"
+  local dst="$2"
+  
+  # Max file size to copy (100KB) - secrets/config are small
+  local max_size=102400
+  # Max gitignored files per top-level directory - secrets have few, dependencies have many
+  local max_files_per_dir=10
+  # Lock files to skip (generated, cause merge conflicts)
+  local skip_files="package-lock.json|yarn.lock|pnpm-lock.yaml|Gemfile.lock|Cargo.lock|poetry.lock|composer.lock"
+  
+  # Get all gitignored files
+  local gitignored_files
+  gitignored_files=$(git -C "$src" ls-files --others --ignored --exclude-standard 2>/dev/null)
+  [[ -z "$gitignored_files" ]] && return 0
+  
+  # Count gitignored files per top-level directory
+  declare -A dir_file_counts=()
+  while IFS= read -r rel_path; do
+    [[ -z "$rel_path" ]] && continue
+    local top_dir="${rel_path%%/*}"
+    # If file is in root (no /), top_dir equals rel_path - use "." as key
+    [[ "$top_dir" == "$rel_path" ]] && top_dir="."
+    dir_file_counts["$top_dir"]=$(( ${dir_file_counts["$top_dir"]:-0} + 1 ))
+  done <<< "$gitignored_files"
+  
+  # Copy files, skipping directories with too many gitignored files
+  local copied=0
+  while IFS= read -r rel_path; do
+    [[ -z "$rel_path" ]] && continue
+    
+    # Skip lock files (generated, cause conflicts)
+    local filename="${rel_path##*/}"
+    if [[ "$filename" =~ ^($skip_files)$ ]]; then
+      continue
+    fi
+    
+    local top_dir="${rel_path%%/*}"
+    [[ "$top_dir" == "$rel_path" ]] && top_dir="."
+    
+    # Skip if this top-level dir has too many gitignored files (likely dependencies)
+    local count=${dir_file_counts["$top_dir"]:-0}
+    if [[ $count -gt $max_files_per_dir ]]; then
+      continue
+    fi
+    
+    local src_file="$src/$rel_path"
+    local dst_file="$dst/$rel_path"
+    
+    # Only copy files, not directories
+    [[ -f "$src_file" ]] || continue
+    
+    # Skip if already exists
+    [[ -f "$dst_file" ]] && continue
+    
+    # Skip large files
+    local file_size
+    file_size=$(stat -f%z "$src_file" 2>/dev/null || stat -c%s "$src_file" 2>/dev/null || echo 0)
+    if [[ "$file_size" -gt "$max_size" ]]; then
+      continue
+    fi
+    
+    mkdir -p "$(dirname "$dst_file")"
+    cp "$src_file" "$dst_file"
+    log "Copied: $rel_path"
+    ((copied++)) || true
+  done <<< "$gitignored_files"
+  
+  if [[ $copied -gt 0 ]]; then
+    log "Copied $copied gitignored file(s) to clone"
+  fi
+}
+
 if [[ -n "$BRANCH" ]]; then
   # Branch specified - create/use clone
   CLONE_BASE="${CLONES_DIR}/${REPO_NAME}"
@@ -144,6 +220,9 @@ if [[ -n "$BRANCH" ]]; then
       git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
       log "Created local clone with branch '$BRANCH'"
     fi
+    
+    # Copy over gitignored files from the source repo
+    copy_gitignored_files "$REPO_ROOT" "$WORKSPACE"
   else
     log "Using existing clone at $WORKSPACE"
     # Update the clone
@@ -225,8 +304,16 @@ fi
 # Generate merged config file (base config + our port override)
 # Remove existing -p port mappings (both "-p" flag and the "HOST:PORT" value that follows)
 OVERRIDE_FILE="${OVERRIDES_DIR}/${WORKSPACE_ID}.json"
+
+# Compute the correct workspaceFolder based on the actual workspace directory name
+# This is critical when using branch clones, as the original devcontainer.json may
+# have a hardcoded workspaceFolder that doesn't match the clone directory name
+WORKSPACE_BASENAME=$(basename "$WORKSPACE")
+WORKSPACE_FOLDER="/workspaces/${WORKSPACE_BASENAME}"
+
 jq --arg name "${REPO_NAME} (port ${PORT})" \
    --arg portmap "${PORT}:${INTERNAL_PORT}" \
+   --arg workspaceFolder "$WORKSPACE_FOLDER" \
    '
    # Remove -p and its following port argument from runArgs
    def remove_port_args:
@@ -241,7 +328,7 @@ jq --arg name "${REPO_NAME} (port ${PORT})" \
          end
        ) | .result
      end;
-   . + {name: $name} | .runArgs = ((.runArgs | remove_port_args) + ["-p", $portmap])
+   . + {name: $name, workspaceFolder: $workspaceFolder} | .runArgs = ((.runArgs | remove_port_args) + ["-p", $portmap])
    ' "$DEVCONTAINER_JSON" > "$OVERRIDE_FILE"
 
 log "Workspace: $WORKSPACE"
@@ -274,9 +361,9 @@ if devcontainer up "${UP_ARGS[@]}"; then
   # Open in VS Code if requested (not --no-open) and in VS Code terminal
   if [[ "$NO_OPEN" != "true" ]] && is_vscode_terminal; then
     log "Opening in VS Code devcontainer..."
-    # Encode workspace path as hex for vscode-remote URI
+    # Encode local workspace path as hex for vscode-remote URI
     HEX_PATH=$(printf '%s' "$WORKSPACE" | xxd -p -c 256 | tr -d '\n')
-    code --folder-uri "vscode-remote://dev-container+${HEX_PATH}${WORKSPACE}"
+    code --folder-uri "vscode-remote://dev-container+${HEX_PATH}${WORKSPACE_FOLDER}"
   elif [[ -n "$BRANCH" ]]; then
     # For clones in non-VS Code terminals, show navigation help
     echo ""
