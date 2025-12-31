@@ -45,13 +45,13 @@
 
 set -euo pipefail
 
-# Configuration
-CONFIG_DIR="${HOME}/.config/devcontainer-multi"
+# Configuration (allow overrides for testing)
+CONFIG_DIR="${DCMULTI_CONFIG_DIR:-${HOME}/.config/devcontainer-multi}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
-CACHE_DIR="${HOME}/.cache/devcontainer-multi"
+CACHE_DIR="${DCMULTI_CACHE_DIR:-${HOME}/.cache/devcontainer-multi}"
 PORTS_FILE="${CACHE_DIR}/ports.json"
 OVERRIDES_DIR="${CACHE_DIR}/overrides"
-CLONES_DIR="${HOME}/.cache/devcontainer-clones"
+CLONES_DIR="${DCMULTI_CLONES_DIR:-${HOME}/.cache/devcontainer-clones}"
 
 # Defaults
 DEFAULT_PORT_START=13000
@@ -207,7 +207,7 @@ DEVCONTAINER_JSON="$WORKSPACE/.devcontainer/devcontainer.json"
 INTERNAL_PORT=$(jq -r '
   (.runArgs // []) | map(select(test("^[0-9]+:[0-9]+$"))) | .[0] // "" | split(":") | .[1] // "",
   (.forwardPorts // []) | .[0] // ""
-' "$DEVCONTAINER_JSON" 2>/dev/null | grep -v '^$' | head -1)
+' "$DEVCONTAINER_JSON" 2>/dev/null | grep -v '^$' | head -1 || true)
 
 # Default to 3000 if we couldn't detect
 INTERNAL_PORT="${INTERNAL_PORT:-3000}"
@@ -222,14 +222,27 @@ if [[ -z "$INTERNAL_PORT" ]] || [[ "$INTERNAL_PORT" == "null" ]]; then
   INTERNAL_PORT="${INTERNAL_PORT:-3000}"
 fi
 
-# Generate override file
+# Generate merged config file (base config + our port override)
+# Remove existing -p port mappings (both "-p" flag and the "HOST:PORT" value that follows)
 OVERRIDE_FILE="${OVERRIDES_DIR}/${WORKSPACE_ID}.json"
-cat > "$OVERRIDE_FILE" << EOF
-{
-  "name": "${REPO_NAME} (port ${PORT})",
-  "runArgs": ["-p", "${PORT}:${INTERNAL_PORT}"]
-}
-EOF
+jq --arg name "${REPO_NAME} (port ${PORT})" \
+   --arg portmap "${PORT}:${INTERNAL_PORT}" \
+   '
+   # Remove -p and its following port argument from runArgs
+   def remove_port_args:
+     if . == null then []
+     else
+       reduce .[] as $item (
+         {result: [], skip_next: false};
+         if .skip_next then {result: .result, skip_next: false}
+         elif $item == "-p" then {result: .result, skip_next: true}
+         elif ($item | test("^[0-9]+:[0-9]+$")) then {result: .result, skip_next: false}
+         else {result: (.result + [$item]), skip_next: false}
+         end
+       ) | .result
+     end;
+   . + {name: $name} | .runArgs = ((.runArgs | remove_port_args) + ["-p", $portmap])
+   ' "$DEVCONTAINER_JSON" > "$OVERRIDE_FILE"
 
 log "Workspace: $WORKSPACE"
 log "Port mapping: localhost:$PORT -> container:$INTERNAL_PORT"
@@ -258,18 +271,19 @@ if devcontainer up "${UP_ARGS[@]}"; then
   log "Access your app at: http://localhost:$PORT"
   echo ""
   
-  # If this is a clone (not current directory), help user navigate
-  if [[ -n "$BRANCH" ]] && [[ "$NO_OPEN" != "true" ]]; then
-    if is_vscode_terminal; then
-      log "Opening clone in VS Code..."
-      code "$WORKSPACE"
-    else
-      echo ""
-      log "To navigate to the clone:"
-      echo "  cd $WORKSPACE"
-      echo ""
-      log "Or use: dcgo $BRANCH"
-    fi
+  # Open in VS Code if requested (not --no-open) and in VS Code terminal
+  if [[ "$NO_OPEN" != "true" ]] && is_vscode_terminal; then
+    log "Opening in VS Code devcontainer..."
+    # Encode workspace path as hex for vscode-remote URI
+    HEX_PATH=$(printf '%s' "$WORKSPACE" | xxd -p -c 256 | tr -d '\n')
+    code --folder-uri "vscode-remote://dev-container+${HEX_PATH}${WORKSPACE}"
+  elif [[ -n "$BRANCH" ]]; then
+    # For clones in non-VS Code terminals, show navigation help
+    echo ""
+    log "To navigate to the clone:"
+    echo "  cd $WORKSPACE"
+    echo ""
+    log "Or use: dcgo $BRANCH"
   fi
   
   echo ""

@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-CACHE_DIR="${HOME}/.cache/devcontainer-multi"
+CACHE_DIR="${DCMULTI_CACHE_DIR:-${HOME}/.cache/devcontainer-multi}"
 PORTS_FILE="${CACHE_DIR}/ports.json"
 
 # Parse arguments
@@ -53,7 +53,7 @@ is_port_active() {
 # Get current workspace for highlighting
 CURRENT_WS=""
 if git rev-parse --git-dir >/dev/null 2>&1; then
-  CURRENT_WS=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  CURRENT_WS=$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)
 fi
 
 if [[ "$JSON_OUTPUT" == "true" ]]; then

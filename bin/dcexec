@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-CACHE_DIR="${HOME}/.cache/devcontainer-multi"
+CACHE_DIR="${DCMULTI_CACHE_DIR:-${HOME}/.cache/devcontainer-multi}"
 PORTS_FILE="${CACHE_DIR}/ports.json"
 OVERRIDES_DIR="${CACHE_DIR}/overrides"
 
@@ -57,12 +57,12 @@ if [[ -z "$WORKSPACE" ]]; then
   if git rev-parse --git-dir >/dev/null 2>&1; then
     WORKSPACE=$(git rev-parse --show-toplevel)
   else
-    WORKSPACE=$(pwd)
+    WORKSPACE=$(pwd -P)
   fi
 fi
 
-# Resolve to absolute path
-WORKSPACE=$(cd "$WORKSPACE" 2>/dev/null && pwd || echo "$WORKSPACE")
+# Resolve to absolute path (use -P to resolve symlinks on macOS)
+WORKSPACE=$(cd "$WORKSPACE" 2>/dev/null && pwd -P || echo "$WORKSPACE")
 
 # Check if workspace is tracked
 if ! jq -e --arg ws "$WORKSPACE" '.[$ws]' "$PORTS_FILE" >/dev/null 2>&1; then

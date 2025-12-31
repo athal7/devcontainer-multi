@@ -22,9 +22,9 @@
 
 set -euo pipefail
 
-CACHE_DIR="${HOME}/.cache/devcontainer-multi"
+CACHE_DIR="${DCMULTI_CACHE_DIR:-${HOME}/.cache/devcontainer-multi}"
 PORTS_FILE="${CACHE_DIR}/ports.json"
-CLONES_DIR="${HOME}/.cache/devcontainer-clones"
+CLONES_DIR="${DCMULTI_CLONES_DIR:-${HOME}/.cache/devcontainer-clones}"
 
 log() { echo "[dcgo] $*" >&2; }
 error() { echo "[dcgo] ERROR: $*" >&2; exit 1; }
