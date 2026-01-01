@@ -95,7 +95,53 @@ Scripts support these env vars to allow test isolation:
 
 Releases are automated via GitHub Actions. To create a release:
 
-1. Tag the commit: `git tag v1.0.0`
-2. Push the tag: `git push origin v1.0.0`
+1. Update version in `bin/ocdc`
+2. Update version and URL in `Formula/ocdc.rb`
+3. Commit: `git commit -am "chore: bump version to v1.0.0"`
+4. Tag: `git tag v1.0.0`
+5. Push: `git push origin main --tags`
+6. Calculate SHA256: `curl -L https://github.com/athal7/ocdc/archive/refs/tags/v1.0.0.tar.gz | shasum -a 256`
+7. Update `Formula/ocdc.rb` with the SHA256
+8. Commit and push the SHA update
 
-The release workflow will run tests, then create a GitHub release with the tarball.
+The release workflow will run tests and create a GitHub release with the tarball.
+
+## Homebrew Tap Setup
+
+The Homebrew formula lives in `Formula/ocdc.rb` and can be installed from a tap.
+
+### Creating the Tap Repository
+
+If you're setting this up for the first time:
+
+1. Create a new GitHub repo named `homebrew-tap`
+2. Add the formula:
+   ```bash
+   mkdir Formula
+   cp Formula/ocdc.rb homebrew-tap/Formula/
+   git add Formula/ocdc.rb
+   git commit -m "Add ocdc formula"
+   git push
+   ```
+
+### Installing from the Tap
+
+Users can then install with:
+```bash
+brew tap athal7/tap
+brew install ocdc
+```
+
+Or in one command:
+```bash
+brew install athal7/tap/ocdc
+```
+
+### Testing the Formula Locally
+
+Before publishing:
+```bash
+brew install --build-from-source Formula/ocdc.rb
+brew test ocdc
+brew audit --strict ocdc
+```
