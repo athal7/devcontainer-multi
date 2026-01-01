@@ -200,6 +200,10 @@ process_poll() {
   local session_template
   session_template=$(poll_config_get "$config_file" ".session.name_template")
   
+  # Get agent (defaults to "plan" for safety in automated sessions)
+  local session_agent
+  session_agent=$(poll_config_get_with_default "$config_file" ".session.agent" "plan")
+  
   # Get source type (defaults to "poll" if not specified)
   local source_type
   source_type=$(poll_config_get_with_default "$config_file" ".source_type" "poll")
@@ -303,6 +307,9 @@ process_poll() {
     prompt_file="${OCDC_POLL_STATE_DIR}/prompt-${session_name}.txt"
     printf '%s' "$prompt" > "$prompt_file"
     
+    # Build opencode command with agent flag
+    local opencode_cmd="opencode --agent $session_agent"
+    
     # Create tmux session running opencode with the prompt
     # Set OCDC_* environment variables so the plugin knows the context
     # The session runs in the clone directory
@@ -311,7 +318,7 @@ process_poll() {
       -e "OCDC_BRANCH=$branch" \
       -e "OCDC_SOURCE_URL=$url" \
       -e "OCDC_SOURCE_TYPE=$source_type" \
-      "opencode --prompt \"\$(cat '$prompt_file')\"; rm -f '$prompt_file'; echo 'Session complete. Press enter to close...'; read"; then
+      "$opencode_cmd --prompt \"\$(cat '$prompt_file')\"; rm -f '$prompt_file'; echo 'Session complete. Press enter to close...'; read"; then
       log_error "    Failed to create tmux session"
       rm -f "$prompt_file"  # Cleanup prompt file on failure
       continue
