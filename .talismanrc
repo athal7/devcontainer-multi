@@ -1,10 +1,14 @@
 fileignoreconfig:
 - filename: test/test_plugin.bash
   checksum: ec7393d0874adfea8622aa41a922aa67b873f433405e007d72ac9aa7b2adb3a6
-- filename: share/ocdc/examples/github-reviews.yaml
-  checksum: a483527a36852b47eb0326a83f04f1867a0de1647011f63c0554ade0f189cfd4
-- filename: share/ocdc/examples/linear-assigned.yaml
-  checksum: 3ed6a1d846bc26f9c17bb3bf6ee72eefc2a042071359be561eff97bde00fee5a
+- filename: lib/ocdc-poll-config.bash
+  checksum: 1fd8219a8825f57f6bc658eadb4204772b7ceb8c018bd72d6ab5bc99c74e4cd8
+- filename: share/ocdc/examples/com.ocdc.poll.plist
+  checksum: 509970ce2057a099be0328649fc1e237f8dcc608b15598bffc00ec83ce91e01d
+- filename: share/ocdc/examples/github-issues.yaml
+  checksum: 8fa9dcb624ecec99378a98ad3b861cb735a646c312dba200e0ef677efd448ccf
 - filename: test/test_poll_config.bash
-  checksum: 890ee3f923c6e7da04c29bb7e09dfb913040848e2bf7c8d1b46dc7c070cb9cf7
+  checksum: 58689981ad53f2d8e3ec7050e03fa1a8d7eed51365f3d2147ebca9d5f0ae2829
+- filename: lib/ocdc-poll
+  checksum: f043ad6cb6f86b952bc287d95b96c19eb53231156b2d60c87a775a31526e4563
 version: "1.0"

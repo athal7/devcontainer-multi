@@ -33,68 +33,49 @@ teardown() {
 # Helper to create test config files
 # =============================================================================
 
-create_valid_github_config() {
-  cat > "$OCDC_POLLS_DIR/github-reviews.yaml" << 'EOF'
-id: github-reviews
-source: github-search
+create_valid_config() {
+  cat > "$OCDC_POLLS_DIR/github-issues.yaml" << 'EOF'
+id: github-issues
 enabled: true
 
-config:
-  query: "is:pr is:open review-requested:@me"
+fetch_command: |
+  gh issue list --repo myorg/myrepo --label "ready" --state open --json number,title,body,url
 
-filters:
-  repos:
-    allow:
-      - "myorg/*"
-    deny:
-      - "myorg/archived-*"
-  labels:
-    deny:
-      - "wip"
-      - "draft"
+item_mapping:
+  key: '"myorg/myrepo-issue-\(.number)"'
+  repo: '"myorg/myrepo"'
+  repo_short: '"myrepo"'
+  number: '.number'
+  title: '.title'
+  body: '.body'
+  url: '.url'
+  branch: '"issue-\(.number)"'
 
-key_template: "{repo}-pr-{number}"
-clone_name_template: "pr-{number}"
-branch_template: "{head_ref}"
-
-repo_source:
-  strategy: auto
+repo_paths:
+  "myorg/myrepo": "~/Projects/myrepo"
 
 prompt:
   template: |
-    You are working in a devcontainer at {workspace} on branch {branch}.
-    
-    Review PR #{number}: {title}
-    URL: {source_url}
-    
-    Please review the changes and provide feedback.
+    Work on issue #{number}: {title}
+    {url}
 
 session:
-  name_template: "ocdc-{key}"
-  agent: review
-
-cleanup:
-  on:
-    - merged
-    - closed
-  delay: 5m
+  name_template: "ocdc-{repo_short}-issue-{number}"
 EOF
 }
 
 create_minimal_config() {
   cat > "$OCDC_POLLS_DIR/minimal.yaml" << 'EOF'
 id: minimal
-source: github-search
 enabled: true
 
-config:
-  query: "is:pr is:open"
+fetch_command: echo '[]'
 
-key_template: "{repo}-pr-{number}"
-branch_template: "{head_ref}"
+item_mapping:
+  key: '"\(.id)"'
 
 prompt:
-  template: "Review PR #{number}"
+  template: "Work on {key}"
 
 session:
   name_template: "ocdc-{key}"
@@ -103,26 +84,40 @@ EOF
 
 create_config_with_prompt_file() {
   mkdir -p "$OCDC_POLLS_DIR/prompts"
-  cat > "$OCDC_POLLS_DIR/prompts/review.md" << 'EOF'
-Review PR #{number}: {title}
-
-Repository: {repo}
-URL: {source_url}
+  cat > "$OCDC_POLLS_DIR/prompts/work.md" << 'EOF'
+Work on issue #{number}: {title}
+{url}
 EOF
 
   cat > "$OCDC_POLLS_DIR/with-prompt-file.yaml" << 'EOF'
 id: with-prompt-file
-source: github-search
 enabled: true
 
-config:
-  query: "is:pr is:open"
+fetch_command: echo '[]'
 
-key_template: "{repo}-pr-{number}"
-branch_template: "{head_ref}"
+item_mapping:
+  key: '"\(.id)"'
 
 prompt:
-  file: prompts/review.md
+  file: prompts/work.md
+
+session:
+  name_template: "ocdc-{key}"
+EOF
+}
+
+create_disabled_config() {
+  cat > "$OCDC_POLLS_DIR/disabled.yaml" << 'EOF'
+id: disabled-poll
+enabled: false
+
+fetch_command: echo '[]'
+
+item_mapping:
+  key: '"\(.id)"'
+
+prompt:
+  template: "Work"
 
 session:
   name_template: "ocdc-{key}"
@@ -131,36 +126,31 @@ EOF
 
 create_invalid_config_missing_id() {
   cat > "$OCDC_POLLS_DIR/invalid-missing-id.yaml" << 'EOF'
-source: github-search
 enabled: true
 
-config:
-  query: "is:pr is:open"
+fetch_command: echo '[]'
 
-key_template: "{repo}-pr-{number}"
-branch_template: "{head_ref}"
+item_mapping:
+  key: '"\(.id)"'
 
 prompt:
-  template: "Review PR"
+  template: "Work"
 
 session:
   name_template: "ocdc-{key}"
 EOF
 }
 
-create_invalid_config_missing_source() {
-  cat > "$OCDC_POLLS_DIR/invalid-missing-source.yaml" << 'EOF'
-id: invalid-missing-source
+create_invalid_config_missing_fetch() {
+  cat > "$OCDC_POLLS_DIR/invalid-missing-fetch.yaml" << 'EOF'
+id: missing-fetch
 enabled: true
 
-config:
-  query: "is:pr is:open"
-
-key_template: "{repo}-pr-{number}"
-branch_template: "{head_ref}"
+item_mapping:
+  key: '"\(.id)"'
 
 prompt:
-  template: "Review PR"
+  template: "Work"
 
 session:
   name_template: "ocdc-{key}"
@@ -169,15 +159,13 @@ EOF
 
 create_invalid_config_missing_prompt() {
   cat > "$OCDC_POLLS_DIR/invalid-missing-prompt.yaml" << 'EOF'
-id: invalid-missing-prompt
-source: github-search
+id: missing-prompt
 enabled: true
 
-config:
-  query: "is:pr is:open"
+fetch_command: echo '[]'
 
-key_template: "{repo}-pr-{number}"
-branch_template: "{head_ref}"
+item_mapping:
+  key: '"\(.id)"'
 
 session:
   name_template: "ocdc-{key}"
@@ -186,71 +174,34 @@ EOF
 
 create_invalid_config_missing_session() {
   cat > "$OCDC_POLLS_DIR/invalid-missing-session.yaml" << 'EOF'
-id: invalid-missing-session
-source: github-search
+id: missing-session
 enabled: true
 
-config:
-  query: "is:pr is:open"
+fetch_command: echo '[]'
 
-key_template: "{repo}-pr-{number}"
-branch_template: "{head_ref}"
+item_mapping:
+  key: '"\(.id)"'
 
 prompt:
-  template: "Review PR"
+  template: "Work"
 EOF
 }
 
-create_linear_config() {
-  cat > "$OCDC_POLLS_DIR/linear-assigned.yaml" << 'EOF'
-id: linear-assigned
-source: linear
-enabled: false
+create_invalid_config_missing_key_mapping() {
+  cat > "$OCDC_POLLS_DIR/invalid-missing-key.yaml" << 'EOF'
+id: missing-key
+enabled: true
 
-config:
-  filter:
-    assignee: "@me"
-    state:
-      type:
-        in:
-          - started
-          - unstarted
+fetch_command: echo '[]'
 
-filters:
-  labels:
-    deny:
-      - "blocked"
-      - "needs-design"
-
-key_template: "{team}-{identifier}"
-clone_name_template: "linear-{identifier}"
-branch_template: "{identifier}"
-
-repo_source:
-  strategy: map
-  mapping:
-    "team:ENG": "~/Projects/api"
-    "team:WEB": "~/Projects/web"
-  default: "~/Projects/main"
+item_mapping:
+  number: '.number'
 
 prompt:
-  template: |
-    Work on this Linear issue:
-
-    **[{identifier}] {title}**
-    {url}
-
-    {description}
+  template: "Work"
 
 session:
-  name_template: "ocdc-linear-{identifier}"
-  agent: dev
-
-cleanup:
-  on:
-    - completed
-    - canceled
-  delay: 5m
+  name_template: "ocdc-{key}"
 EOF
 }
 
@@ -274,11 +225,11 @@ test_poll_config_can_be_sourced() {
   return 0
 }
 
-test_validate_valid_github_config() {
+test_validate_valid_config() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_github_config
+  create_valid_config
   
-  if ! poll_config_validate "$OCDC_POLLS_DIR/github-reviews.yaml"; then
+  if ! poll_config_validate "$OCDC_POLLS_DIR/github-issues.yaml"; then
     echo "Valid config should pass validation"
     return 1
   fi
@@ -307,17 +258,6 @@ test_validate_config_with_prompt_file() {
   return 0
 }
 
-test_validate_linear_config() {
-  source "$LIB_DIR/ocdc-poll-config.bash"
-  create_linear_config
-  
-  if ! poll_config_validate "$OCDC_POLLS_DIR/linear-assigned.yaml"; then
-    echo "Valid Linear config should pass validation"
-    return 1
-  fi
-  return 0
-}
-
 test_validate_rejects_missing_id() {
   source "$LIB_DIR/ocdc-poll-config.bash"
   create_invalid_config_missing_id
@@ -329,12 +269,12 @@ test_validate_rejects_missing_id() {
   return 0
 }
 
-test_validate_rejects_missing_source() {
+test_validate_rejects_missing_fetch() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_invalid_config_missing_source
+  create_invalid_config_missing_fetch
   
-  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-source.yaml" 2>/dev/null; then
-    echo "Config missing 'source' should fail validation"
+  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-fetch.yaml" 2>/dev/null; then
+    echo "Config missing 'fetch_command' should fail validation"
     return 1
   fi
   return 0
@@ -362,22 +302,33 @@ test_validate_rejects_missing_session() {
   return 0
 }
 
+test_validate_rejects_missing_key_mapping() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_invalid_config_missing_key_mapping
+  
+  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-key.yaml" 2>/dev/null; then
+    echo "Config missing 'item_mapping.key' should fail validation"
+    return 1
+  fi
+  return 0
+}
+
 test_get_config_field() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_github_config
+  create_valid_config
   
   local id
-  id=$(poll_config_get "$OCDC_POLLS_DIR/github-reviews.yaml" ".id")
-  assert_equals "github-reviews" "$id"
+  id=$(poll_config_get "$OCDC_POLLS_DIR/github-issues.yaml" ".id")
+  assert_equals "github-issues" "$id"
 }
 
 test_get_config_nested_field() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_github_config
+  create_valid_config
   
-  local query
-  query=$(poll_config_get "$OCDC_POLLS_DIR/github-reviews.yaml" ".config.query")
-  assert_equals "is:pr is:open review-requested:@me" "$query"
+  local session_name
+  session_name=$(poll_config_get "$OCDC_POLLS_DIR/github-issues.yaml" ".session.name_template")
+  assert_equals 'ocdc-{repo_short}-issue-{number}' "$session_name"
 }
 
 test_get_config_enabled_defaults_to_true() {
@@ -391,19 +342,19 @@ test_get_config_enabled_defaults_to_true() {
 
 test_list_all_configs() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_github_config
-  create_linear_config
+  create_valid_config
+  create_disabled_config
   
   local configs
   configs=$(poll_config_list "$OCDC_POLLS_DIR")
   
   # Should find both configs
-  if [[ "$configs" != *"github-reviews.yaml"* ]]; then
-    echo "Should list github-reviews.yaml"
+  if [[ "$configs" != *"github-issues.yaml"* ]]; then
+    echo "Should list github-issues.yaml"
     return 1
   fi
-  if [[ "$configs" != *"linear-assigned.yaml"* ]]; then
-    echo "Should list linear-assigned.yaml"
+  if [[ "$configs" != *"disabled.yaml"* ]]; then
+    echo "Should list disabled.yaml"
     return 1
   fi
   return 0
@@ -411,19 +362,19 @@ test_list_all_configs() {
 
 test_list_enabled_configs_only() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_github_config  # enabled: true
-  create_linear_config         # enabled: false
+  create_valid_config      # enabled: true
+  create_disabled_config   # enabled: false
   
   local configs
   configs=$(poll_config_list_enabled "$OCDC_POLLS_DIR")
   
   # Should only find enabled config
-  if [[ "$configs" != *"github-reviews.yaml"* ]]; then
-    echo "Should list enabled github-reviews.yaml"
+  if [[ "$configs" != *"github-issues.yaml"* ]]; then
+    echo "Should list enabled github-issues.yaml"
     return 1
   fi
-  if [[ "$configs" == *"linear-assigned.yaml"* ]]; then
-    echo "Should not list disabled linear-assigned.yaml"
+  if [[ "$configs" == *"disabled.yaml"* ]]; then
+    echo "Should not list disabled disabled.yaml"
     return 1
   fi
   return 0
@@ -432,24 +383,23 @@ test_list_enabled_configs_only() {
 test_render_template_simple() {
   source "$LIB_DIR/ocdc-poll-config.bash"
   
-  local template="PR #{number}: {title}"
+  local template="Issue #{number}: {title}"
   local result
   result=$(poll_config_render_template "$template" number=123 title="Add feature")
   
-  assert_equals "PR #123: Add feature" "$result"
+  assert_equals "Issue #123: Add feature" "$result"
 }
 
 test_render_template_multiple_vars() {
   source "$LIB_DIR/ocdc-poll-config.bash"
   
-  local template="Working on {repo} branch {branch} at {workspace}"
+  local template="Working on {repo} branch {branch}"
   local result
   result=$(poll_config_render_template "$template" \
     repo="myorg/api" \
-    branch="feature-x" \
-    workspace="/path/to/clone")
+    branch="issue-42")
   
-  assert_equals "Working on myorg/api branch feature-x at /path/to/clone" "$result"
+  assert_equals "Working on myorg/api branch issue-42" "$result"
 }
 
 test_render_template_preserves_unknown_vars() {
@@ -464,12 +414,12 @@ test_render_template_preserves_unknown_vars() {
 
 test_load_prompt_from_template() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_github_config
+  create_valid_config
   
   local prompt
-  prompt=$(poll_config_get_prompt "$OCDC_POLLS_DIR/github-reviews.yaml")
+  prompt=$(poll_config_get_prompt "$OCDC_POLLS_DIR/github-issues.yaml")
   
-  if [[ "$prompt" != *"working in a devcontainer"* ]]; then
+  if [[ "$prompt" != *"Work on issue"* ]]; then
     echo "Should load prompt template"
     return 1
   fi
@@ -483,7 +433,7 @@ test_load_prompt_from_file() {
   local prompt
   prompt=$(poll_config_get_prompt "$OCDC_POLLS_DIR/with-prompt-file.yaml")
   
-  if [[ "$prompt" != *"Review PR #{number}"* ]]; then
+  if [[ "$prompt" != *"Work on issue"* ]]; then
     echo "Should load prompt from file"
     return 1
   fi
@@ -499,14 +449,14 @@ echo "Poll Configuration Tests:"
 for test_func in \
   test_poll_config_library_exists \
   test_poll_config_can_be_sourced \
-  test_validate_valid_github_config \
+  test_validate_valid_config \
   test_validate_minimal_config \
   test_validate_config_with_prompt_file \
-  test_validate_linear_config \
   test_validate_rejects_missing_id \
-  test_validate_rejects_missing_source \
+  test_validate_rejects_missing_fetch \
   test_validate_rejects_missing_prompt \
   test_validate_rejects_missing_session \
+  test_validate_rejects_missing_key_mapping \
   test_get_config_field \
   test_get_config_nested_field \
   test_get_config_enabled_defaults_to_true \

@@ -1,0 +1,365 @@
+#!/usr/bin/env bash
+#
+# ocdc-poll - Poll orchestrator for automated devcontainer sessions
+#
+# Usage:
+#   ocdc poll [--once] [--dry-run] [--config <name>]
+#
+# Options:
+#   --once      Run one poll cycle and exit (default)
+#   --dry-run   Show what would be done without executing
+#   --config    Only run specific config by id
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="$(dirname "$SCRIPT_DIR")/bin"
+source "${SCRIPT_DIR}/ocdc-paths.bash"
+source "${SCRIPT_DIR}/ocdc-poll-config.bash"
+
+# Ensure ocdc commands are available
+export PATH="$BIN_DIR:$PATH"
+
+# State file for tracking processed items
+STATE_FILE="${OCDC_POLL_STATE_DIR}/processed.json"
+
+# Ensure state directory and file exist
+mkdir -p "$OCDC_POLL_STATE_DIR"
+[[ -f "$STATE_FILE" ]] || echo '{}' > "$STATE_FILE"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Options
+DRY_RUN=false
+SINGLE_CONFIG=""
+VERBOSE=false
+DAEMON=false
+INTERVAL=300
+
+log() {
+  echo -e "${BLUE}[poll]${NC} $*" >&2
+}
+
+log_success() {
+  echo -e "${GREEN}[poll]${NC} $*" >&2
+}
+
+log_warn() {
+  echo -e "${YELLOW}[poll]${NC} $*" >&2
+}
+
+log_error() {
+  echo -e "${RED}[poll]${NC} $*" >&2
+}
+
+show_help() {
+  cat << 'EOF'
+Usage: ocdc poll [options]
+
+Poll configured sources and spawn OpenCode sessions for new items.
+
+Options:
+  --once              Run one poll cycle and exit (default behavior)
+  --daemon            Run continuously, polling every interval
+  --interval <secs>   Poll interval in seconds (default: 300, requires --daemon)
+  --dry-run           Show what would be done without executing
+  --config <id>       Only run specific config by id
+  --verbose           Show detailed output
+  --help              Show this help
+
+Examples:
+  ocdc poll                    # Run all enabled polls once
+  ocdc poll --dry-run          # Preview what would happen
+  ocdc poll --config github-issues  # Run only github-issues poll
+EOF
+}
+
+# Check if an item has been processed
+is_processed() {
+  local key="$1"
+  jq -e --arg key "$key" '.[$key] != null' "$STATE_FILE" >/dev/null 2>&1
+}
+
+# Mark an item as processed
+mark_processed() {
+  local key="$1"
+  local config_id="$2"
+  local timestamp
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  
+  local tmp
+  tmp=$(mktemp)
+  jq --arg key "$key" --arg config "$config_id" --arg ts "$timestamp" \
+    '.[$key] = {config: $config, processed_at: $ts}' "$STATE_FILE" > "$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+# Get item field using jq mapping
+get_item_field() {
+  local item_json="$1"
+  local jq_expr="$2"
+  
+  echo "$item_json" | jq -r "$jq_expr"
+}
+
+# Expand ~ in paths
+expand_path() {
+  local path="$1"
+  echo "${path/#\~/$HOME}"
+}
+
+# Process a single poll config
+process_poll() {
+  local config_file="$1"
+  local config_id
+  config_id=$(poll_config_get "$config_file" ".id")
+  
+  log "Processing poll: $config_id"
+  
+  # Check if enabled
+  local enabled
+  enabled=$(poll_config_get_with_default "$config_file" ".enabled" "true")
+  if [[ "$enabled" != "true" ]]; then
+    log "  Skipping (disabled)"
+    return 0
+  fi
+  
+  # Get fetch command
+  local fetch_cmd
+  fetch_cmd=$(poll_config_get "$config_file" ".fetch_command")
+  if [[ -z "$fetch_cmd" ]]; then
+    log_error "  No fetch_command defined"
+    return 1
+  fi
+  
+  # Execute fetch command
+  log "  Fetching items..."
+  local items_json
+  if ! items_json=$(eval "$fetch_cmd" 2>&1); then
+    log_error "  Fetch command failed: $items_json"
+    return 1
+  fi
+  
+  # Check if we got valid JSON array
+  local item_count
+  item_count=$(echo "$items_json" | jq -r 'length' 2>/dev/null || echo "0")
+  log "  Found $item_count items"
+  
+  if [[ "$item_count" == "0" ]]; then
+    return 0
+  fi
+  
+  # Get mapping expressions
+  local key_expr repo_expr repo_short_expr number_expr title_expr body_expr url_expr branch_expr
+  key_expr=$(poll_config_get "$config_file" ".item_mapping.key")
+  repo_expr=$(poll_config_get "$config_file" ".item_mapping.repo")
+  repo_short_expr=$(poll_config_get "$config_file" ".item_mapping.repo_short")
+  number_expr=$(poll_config_get "$config_file" ".item_mapping.number")
+  title_expr=$(poll_config_get "$config_file" ".item_mapping.title")
+  body_expr=$(poll_config_get "$config_file" ".item_mapping.body")
+  url_expr=$(poll_config_get "$config_file" ".item_mapping.url")
+  branch_expr=$(poll_config_get "$config_file" ".item_mapping.branch")
+  
+  # Get prompt template
+  local prompt_template
+  prompt_template=$(poll_config_get "$config_file" ".prompt.template")
+  
+  # Get session name template
+  local session_template
+  session_template=$(poll_config_get "$config_file" ".session.name_template")
+  
+  # Process each item
+  echo "$items_json" | jq -c '.[]' | while read -r item; do
+    # Extract fields
+    local key repo repo_short number title body url branch
+    key=$(get_item_field "$item" "$key_expr")
+    repo=$(get_item_field "$item" "$repo_expr")
+    repo_short=$(get_item_field "$item" "$repo_short_expr")
+    number=$(get_item_field "$item" "$number_expr")
+    title=$(get_item_field "$item" "$title_expr")
+    body=$(get_item_field "$item" "$body_expr")
+    url=$(get_item_field "$item" "$url_expr")
+    branch=$(get_item_field "$item" "$branch_expr")
+    
+    # Check if already processed
+    if is_processed "$key"; then
+      [[ "$VERBOSE" == "true" ]] && log "  Skipping $key (already processed)"
+      continue
+    fi
+    
+    log "  New item: $key"
+    log "    Repo: $repo"
+    log "    Branch: $branch"
+    log "    Title: $title"
+    
+    # Get repo path
+    local repo_path
+    repo_path=$(poll_config_get "$config_file" ".repo_paths.\"$repo\"")
+    if [[ -z "$repo_path" ]]; then
+      log_warn "    No repo_path configured for $repo, skipping"
+      continue
+    fi
+    repo_path=$(expand_path "$repo_path")
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+      log "    [DRY-RUN] Would create devcontainer and session"
+      continue
+    fi
+    
+    # Render templates
+    local session_name
+    session_name=$(poll_config_render_template "$session_template" \
+      key="$key" \
+      repo="$repo" \
+      repo_short="$repo_short" \
+      number="$number" \
+      title="$title" \
+      branch="$branch")
+    
+    local prompt
+    prompt=$(poll_config_render_template "$prompt_template" \
+      key="$key" \
+      repo="$repo" \
+      repo_short="$repo_short" \
+      number="$number" \
+      title="$title" \
+      body="$body" \
+      url="$url" \
+      branch="$branch")
+    
+    # Create devcontainer clone
+    log "    Creating devcontainer clone..."
+    local clone_dir="${OCDC_CLONES_DIR}/${repo_short}/${branch}"
+    
+    if [[ ! -d "$clone_dir" ]]; then
+      if ! (cd "$repo_path" && ocdc up "$branch" --no-open 2>&1); then
+        log_error "    Failed to create devcontainer"
+        continue
+      fi
+    fi
+    
+    # Check if tmux session already exists
+    if tmux has-session -t "$session_name" 2>/dev/null; then
+      log_warn "    Session $session_name already exists"
+      mark_processed "$key" "$config_id"
+      continue
+    fi
+    
+    # Create tmux session with opencode
+    log "    Creating tmux session: $session_name"
+    
+    # Escape prompt for shell
+    local escaped_prompt
+    escaped_prompt=$(printf '%s' "$prompt" | sed "s/'/'\\\\''/g")
+    
+    # Create tmux session running opencode with the prompt
+    # The session runs in the clone directory
+    # After opencode exits, keep bash running so user can inspect
+    tmux new-session -d -s "$session_name" -c "$clone_dir" \
+      "opencode --prompt '${escaped_prompt}'; echo 'Press enter to close...'; read"
+    
+    log_success "    Session $session_name created"
+    log "    Attach with: tmux attach -t $session_name"
+    mark_processed "$key" "$config_id"
+  done
+  
+  return 0
+}
+
+# Main
+main() {
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --once)
+        DAEMON=false
+        shift
+        ;;
+      --daemon)
+        DAEMON=true
+        shift
+        ;;
+      --interval)
+        INTERVAL="$2"
+        shift 2
+        ;;
+      --dry-run)
+        DRY_RUN=true
+        shift
+        ;;
+      --config)
+        SINGLE_CONFIG="$2"
+        shift 2
+        ;;
+      --verbose)
+        VERBOSE=true
+        shift
+        ;;
+      --help|-h)
+        show_help
+        exit 0
+        ;;
+      *)
+        log_error "Unknown option: $1"
+        show_help
+        exit 1
+        ;;
+    esac
+  done
+  
+  if [[ "$DAEMON" == "true" ]]; then
+    log "Starting poll daemon (interval: ${INTERVAL}s)"
+    while true; do
+      run_poll_cycle
+      log "Sleeping for ${INTERVAL}s..."
+      sleep "$INTERVAL"
+    done
+  else
+    run_poll_cycle
+  fi
+}
+
+# Run one poll cycle
+run_poll_cycle() {
+  # Find poll configs
+  if [[ ! -d "$OCDC_POLLS_DIR" ]]; then
+    log_warn "No polls directory found at $OCDC_POLLS_DIR"
+    return 0
+  fi
+  
+  local found_configs=false
+  
+  for config_file in "$OCDC_POLLS_DIR"/*.yaml "$OCDC_POLLS_DIR"/*.yml; do
+    [[ -f "$config_file" ]] || continue
+    
+    # If single config specified, skip others
+    if [[ -n "$SINGLE_CONFIG" ]]; then
+      local config_id
+      config_id=$(poll_config_get "$config_file" ".id")
+      if [[ "$config_id" != "$SINGLE_CONFIG" ]]; then
+        continue
+      fi
+    fi
+    
+    found_configs=true
+    process_poll "$config_file" || true
+  done
+  
+  if [[ "$found_configs" == "false" ]]; then
+    if [[ -n "$SINGLE_CONFIG" ]]; then
+      log_error "Config '$SINGLE_CONFIG' not found"
+      return 1
+    else
+      log "No poll configs found in $OCDC_POLLS_DIR"
+    fi
+  fi
+  
+  log "Poll cycle complete"
+}
+
+main "$@"

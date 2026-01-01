@@ -62,6 +62,7 @@ Commands:
   exec <cmd>         Execute command in running container
   list               List all instances and clones
   go [branch]        Navigate to an existing clone
+  poll [options]     Poll sources and spawn OpenCode sessions
   plugin <cmd>       Manage OpenCode plugin (install/status/uninstall)
   version            Show version information
   help               Show this help message
@@ -185,6 +186,9 @@ dispatch() {
       ;;
     tui)
       exec "$LIB_DIR/ocdc-tui" "$@"
+      ;;
+    poll)
+      exec "$LIB_DIR/ocdc-poll" "$@"
       ;;
     plugin)
       plugin_cmd "$@"

@@ -77,16 +77,6 @@ _yaml_get_default() {
 # Schema Validation
 # =============================================================================
 
-# Required fields for a valid poll configuration
-_POLL_REQUIRED_FIELDS=(
-  "id"
-  "source"
-  "key_template"
-  "branch_template"
-  "prompt"
-  "session"
-)
-
 # Validate a poll configuration file
 # Returns 0 if valid, 1 if invalid
 # Usage: poll_config_validate "/path/to/config.yaml"
@@ -106,16 +96,28 @@ poll_config_validate() {
     return 1
   fi
   
-  # Check required fields using direct piping
-  for field in "${_POLL_REQUIRED_FIELDS[@]}"; do
-    local value
-    value=$(_yaml_get "$config_file" ".$field")
-    if [[ -z "$value" ]]; then
-      errors+=("Missing required field: $field")
-    fi
-  done
+  # Required: id
+  local id
+  id=$(_yaml_get "$config_file" ".id")
+  if [[ -z "$id" ]]; then
+    errors+=("Missing required field: id")
+  fi
   
-  # Validate prompt has either template or file
+  # Required: fetch_command
+  local fetch_cmd
+  fetch_cmd=$(_yaml_get "$config_file" ".fetch_command")
+  if [[ -z "$fetch_cmd" ]]; then
+    errors+=("Missing required field: fetch_command")
+  fi
+  
+  # Required: item_mapping.key
+  local key_mapping
+  key_mapping=$(_yaml_get "$config_file" ".item_mapping.key")
+  if [[ -z "$key_mapping" ]]; then
+    errors+=("Missing required field: item_mapping.key")
+  fi
+  
+  # Required: prompt with template or file
   local prompt_template prompt_file
   prompt_template=$(_yaml_get "$config_file" ".prompt.template")
   prompt_file=$(_yaml_get "$config_file" ".prompt.file")
@@ -134,26 +136,12 @@ poll_config_validate() {
     fi
   fi
   
-  # Validate session has name_template
+  # Required: session.name_template
   local session_name
   session_name=$(_yaml_get "$config_file" ".session.name_template")
   if [[ -z "$session_name" ]]; then
-    errors+=("session must have 'name_template'")
+    errors+=("Missing required field: session.name_template")
   fi
-  
-  # Validate source is a known type
-  local source
-  source=$(_yaml_get "$config_file" ".source")
-  case "$source" in
-    github-search|linear)
-      # Valid sources
-      ;;
-    *)
-      if [[ -n "$source" ]]; then
-        errors+=("Unknown source type: $source (expected: github-search, linear)")
-      fi
-      ;;
-  esac
   
   # Report errors
   if [[ ${#errors[@]} -gt 0 ]]; then
