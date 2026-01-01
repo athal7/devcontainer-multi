@@ -892,12 +892,20 @@ can_run_integration_tests() {
   return 0
 }
 
+# Cross-platform timeout wrapper
+# Uses perl alarm which works on macOS and Linux
+run_with_timeout() {
+  local timeout_secs="$1"
+  shift
+  perl -e "alarm $timeout_secs; exec @ARGV" "$@" 2>&1
+}
+
 # Run opencode and capture output (with timeout)
 run_opencode() {
   local prompt="$1"
   local timeout="${2:-60}"
   
-  timeout "$timeout" opencode run --format json "$prompt" 2>&1
+  run_with_timeout "$timeout" opencode run --format json "$prompt"
 }
 
 # Extract text content from opencode JSON output
@@ -908,9 +916,56 @@ extract_opencode_text() {
   echo "$output" | grep -o '"text":"[^"]*"' | sed 's/"text":"//;s/"$//' | tr '\n' ' '
 }
 
-test_opencode_plugin_loads() {
+test_opencode_starts_within_timeout() {
   if ! can_run_integration_tests; then
     echo "SKIP: opencode integration tests disabled (CI=${CI:-false}, opencode=$(command -v opencode 2>/dev/null || echo 'not found'))"
+    return 0
+  fi
+  
+  # CRITICAL: Verify opencode starts within 10 seconds
+  # This catches plugin initialization hangs that would block startup indefinitely.
+  # The plugin's init operations (installCommand, cleanupStaleSessions) must not
+  # block even if the OpenCode API or Docker is slow/unavailable.
+  
+  local start_time end_time elapsed output
+  start_time=$(date +%s)
+  
+  # Use a short timeout - if plugin hangs, this will fail
+  output=$(run_with_timeout 10 opencode run --format json "Say hi" 2>&1)
+  local exit_code=$?
+  
+  end_time=$(date +%s)
+  elapsed=$((end_time - start_time))
+  
+  if [[ $exit_code -ne 0 ]]; then
+    # Check if it was a timeout (exit code 142 = SIGALRM)
+    if [[ $exit_code -eq 142 ]] || [[ "$output" == *"Alarm clock"* ]]; then
+      echo "FAIL: opencode startup timed out after ${elapsed}s (plugin may be hanging)"
+      echo "Output: $output"
+      return 1
+    fi
+    echo "opencode run failed (exit $exit_code): $output"
+    return 1
+  fi
+  
+  # Verify we got a response
+  if ! echo "$output" | grep -q '"type"'; then
+    echo "No valid JSON output from opencode"
+    echo "Output: $output"
+    return 1
+  fi
+  
+  # Should complete well under 10 seconds (typically 2-5s)
+  if [[ $elapsed -gt 8 ]]; then
+    echo "WARNING: opencode took ${elapsed}s to start (may indicate slow init)"
+  fi
+  
+  return 0
+}
+
+test_opencode_plugin_loads() {
+  if ! can_run_integration_tests; then
+    echo "SKIP: opencode integration tests disabled"
     return 0
   fi
   
@@ -1211,6 +1266,7 @@ echo ""
 echo "OpenCode Runtime Integration Tests (CI=${CI:-false}):"
 
 for test_func in \
+  test_opencode_starts_within_timeout \
   test_opencode_plugin_loads \
   test_opencode_ocdc_tool_responds \
   test_opencode_ocdc_set_context_rejects_invalid \
