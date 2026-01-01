@@ -35,7 +35,8 @@ _yaml_to_json() {
     return 1
   fi
   
-  ruby -ryaml -rjson -e "puts JSON.generate(YAML.load_file('$yaml_file'))" 2>/dev/null
+  # Pass filename as argument to avoid shell injection
+  ruby -ryaml -rjson -e 'puts JSON.generate(YAML.load_file(ARGV[0]))' "$yaml_file" 2>/dev/null
 }
 
 # Get a field from YAML file using jq path
@@ -50,8 +51,8 @@ _yaml_get() {
     return 1
   fi
   
-  # Pipe directly to avoid bash variable issues with multiline JSON strings
-  ruby -ryaml -rjson -e "puts JSON.generate(YAML.load_file('$yaml_file'))" 2>/dev/null | \
+  # Pass filename as argument to avoid shell injection
+  ruby -ryaml -rjson -e 'puts JSON.generate(YAML.load_file(ARGV[0]))' "$yaml_file" 2>/dev/null | \
     jq -r "$jq_path | if . == null then empty else . end" 2>/dev/null
 }
 
@@ -238,7 +239,7 @@ poll_config_list() {
     return 0
   fi
   
-  find "$polls_dir" -maxdepth 1 -name "*.yaml" -o -name "*.yml" 2>/dev/null | \
+  find "$polls_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) 2>/dev/null | \
     while read -r file; do
       basename "$file"
     done
