@@ -28,7 +28,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Show version
 show_version() {
-  echo "ocdc version $VERSION"
+  cat << 'EOF'
+      ⚡
+  ___  ___ ___  ___ 
+ / _ \/ __/ _ \/ __|
+| (_) | (_| (_) | (__ 
+ \___/ \___\___/ \___|
+      ⚡
+EOF
+  echo "  ocdc v$VERSION"
 }
 
 # Show help
