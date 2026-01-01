@@ -59,7 +59,7 @@ test_lock_file_blocks_second_lock() {
   local got_lock=false
   (
     # Use timeout with a very short duration
-    timeout 0.3 bash -c "source '$LIB_DIR/ocdc-poll.bash' && lock_file '$lockfile'" 2>/dev/null && got_lock=true
+    timeout 0.3 bash -c "source '$LIB_DIR/ocdc-file-lock.bash' && lock_file '$lockfile'" 2>/dev/null && got_lock=true
   ) &
   local bg_pid=$!
   
@@ -122,11 +122,16 @@ _test_mark_processed() {
   timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   
   lock_file "${STATE_FILE}.lock"
+  # Ensure lock is released even if jq/mv fails
+  trap 'unlock_file "${STATE_FILE}.lock"' EXIT
+  
   local tmp
   tmp=$(mktemp)
   jq --arg key "$key" --arg config "$config_id" --arg ts "$timestamp" \
     '.[$key] = {config: $config, processed_at: $ts}' "$STATE_FILE" > "$tmp"
   mv "$tmp" "$STATE_FILE"
+  
+  trap - EXIT
   unlock_file "${STATE_FILE}.lock"
 }
 
@@ -196,6 +201,27 @@ test_mark_processed_no_lock_file_left_behind() {
   return 0
 }
 
+test_mark_processed_releases_lock_on_error() {
+  source "$LIB_DIR/ocdc-file-lock.bash"
+  
+  export STATE_FILE="$TEST_DIR/processed.json"
+  # Create invalid JSON to make jq fail
+  echo 'not valid json' > "$STATE_FILE"
+  
+  # Run in subshell so error doesn't abort test
+  (
+    set +e  # Disable errexit in subshell
+    _test_mark_processed "test-key-4" "test-config" 2>/dev/null
+  )
+  
+  # Lock directory should be cleaned up even after failure
+  if [[ -d "${STATE_FILE}.lock" ]]; then
+    echo "Lock directory should be removed even when jq fails"
+    return 1
+  fi
+  return 0
+}
+
 # =============================================================================
 # Run Tests
 # =============================================================================
@@ -209,7 +235,8 @@ for test_func in \
   test_unlock_file_succeeds_when_not_locked \
   test_mark_processed_creates_state_entry \
   test_mark_processed_does_not_use_flock \
-  test_mark_processed_no_lock_file_left_behind
+  test_mark_processed_no_lock_file_left_behind \
+  test_mark_processed_releases_lock_on_error
 do
   setup
   run_test "${test_func#test_}" "$test_func"

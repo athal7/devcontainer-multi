@@ -118,11 +118,16 @@ mark_processed() {
   
   # Use mkdir-based locking for cross-platform compatibility (flock not on macOS)
   lock_file "${STATE_FILE}.lock"
+  # Ensure lock is released even if jq/mv fails (set -e would otherwise leave stale lock)
+  trap 'unlock_file "${STATE_FILE}.lock"' EXIT
+  
   local tmp
   tmp=$(mktemp)
   jq --arg key "$key" --arg config "$config_id" --arg ts "$timestamp" \
     '.[$key] = {config: $config, processed_at: $ts}' "$STATE_FILE" > "$tmp"
   mv "$tmp" "$STATE_FILE"
+  
+  trap - EXIT
   unlock_file "${STATE_FILE}.lock"
 }
 
