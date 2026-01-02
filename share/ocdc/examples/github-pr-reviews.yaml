@@ -7,43 +7,17 @@
 #
 # Prerequisites:
 # - gh CLI installed and authenticated
-# - Repos listed in repo_paths must exist locally
-# - Custom /review command configured in OpenCode (optional)
+#
+# All other settings (fetch options, item mapping, prompt, session) use
+# smart defaults based on source_type. Override only if needed.
 
 id: github-pr-reviews
-enabled: true
-
-# Source type for tracking (used by opencode plugin)
 source_type: github_pr
 
-# Query GitHub for PRs requesting your review
-# Customize the repos to match your setup
-fetch_command: |
-  gh pr list --repo OWNER/REPO --search "review-requested:@me" --json number,title,body,url,headRefName | jq '[.[] | . + {repo: "OWNER/REPO", repo_short: "REPO"}]'
-
-# jq expressions to extract fields from each item
-item_mapping:
-  key: '"\(.repo)-review-\(.number)"'
-  repo: '.repo'
-  repo_short: '.repo_short'
-  number: '.number'
-  title: '.title'
-  body: '.body // ""'
-  url: '.url'
-  branch: '.headRefName'
-
-# Map repos to local paths
-repo_paths:
-  "OWNER/REPO": "~/path/to/repo"
-
-# Prompt template - invokes the /review command with the PR URL
-# The /review command handles fetching PR context and providing feedback
-prompt:
-  template: |
-    /review {url}
-
-session:
-  name_template: "ocdc-{repo_short}-review-{number}"
-  # Use the default 'plan' agent (read-only, safe for automated reviews)
-  # Uncomment to override with a different agent:
-  # agent: build
+# Map GitHub repos/orgs to local repositories
+# Most specific rule wins (repo+labels > labels > repo > org)
+repo_filters:
+  - repo: "owner/backend"
+    repo_path: "~/code/backend"
+  - repo: "owner/frontend"
+    repo_path: "~/code/frontend"

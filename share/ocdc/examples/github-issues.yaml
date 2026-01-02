@@ -2,50 +2,22 @@
 #
 # GitHub Issues Poll Configuration
 #
-# Polls for issues with a specific label and creates devcontainer
+# Polls for GitHub issues assigned to you and creates devcontainer
 # sessions with OpenCode to work on them.
-#
-# To start work on an issue, add the configured label to it.
 #
 # Prerequisites:
 # - gh CLI installed and authenticated
-# - Repos listed in repo_paths must exist locally
+#
+# All other settings (fetch options, item mapping, prompt, session) use
+# smart defaults based on source_type. Override only if needed.
 
 id: github-issues
-enabled: true
-
-# Source type for tracking (used by opencode plugin)
 source_type: github_issue
 
-# Command to fetch items - must output JSON array
-# Customize the repos and label to match your setup
-fetch_command: |
-  gh issue list --repo OWNER/REPO --label "ocdc:ready" --state open --json number,title,body,url | jq '[.[] | . + {repo: "OWNER/REPO", repo_short: "REPO"}]'
-
-# jq expressions to extract fields from each item
-item_mapping:
-  key: '"\(.repo)-issue-\(.number)"'
-  repo: '.repo'
-  repo_short: '.repo_short'
-  number: '.number'
-  title: '.title'
-  body: '.body'
-  url: '.url'
-  branch: '"issue-\(.number)"'
-
-# Map repos to local paths
-repo_paths:
-  "OWNER/REPO": "~/path/to/repo"
-
-prompt:
-  template: |
-    Work on issue #{number}: {title}
-    {url}
-
-    {body}
-
-session:
-  name_template: "ocdc-{repo_short}-issue-{number}"
-  # Use 'build' agent for issue work (can write code)
-  # Default is 'plan' (read-only, safe for automated sessions)
-  agent: build
+# Map GitHub repos/orgs/labels to local repositories
+# Most specific rule wins (repo+labels > labels > repo > org)
+repo_filters:
+  - repo: "owner/backend"
+    repo_path: "~/code/backend"
+  - repo: "owner/frontend"
+    repo_path: "~/code/frontend"

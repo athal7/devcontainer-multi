@@ -30,79 +30,103 @@ teardown() {
 }
 
 # =============================================================================
-# Helper to create test config files
+# Helper to create test config files (NEW SCHEMA)
 # =============================================================================
 
-create_valid_config() {
+create_valid_linear_config() {
+  cat > "$OCDC_POLLS_DIR/linear-issues.yaml" << 'EOF'
+id: linear-issues
+source_type: linear_issue
+
+repo_filters:
+  - team: "ENG"
+    repo_path: "~/code/engineering"
+  - team: "PROD"
+    labels: ["backend"]
+    repo_path: "~/code/backend"
+EOF
+}
+
+create_valid_github_issue_config() {
   cat > "$OCDC_POLLS_DIR/github-issues.yaml" << 'EOF'
 id: github-issues
-enabled: true
+source_type: github_issue
 
-fetch_command: |
-  gh issue list --repo myorg/myrepo --label "ready" --state open --json number,title,body,url
-
-item_mapping:
-  key: '"myorg/myrepo-issue-\(.number)"'
-  repo: '"myorg/myrepo"'
-  repo_short: '"myrepo"'
-  number: '.number'
-  title: '.title'
-  body: '.body'
-  url: '.url'
-  branch: '"issue-\(.number)"'
-
-repo_paths:
-  "myorg/myrepo": "~/Projects/myrepo"
-
-prompt:
-  template: |
-    Work on issue #{number}: {title}
-    {url}
-
-session:
-  name_template: "ocdc-{repo_short}-issue-{number}"
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
+  - org: "myorg"
+    labels: ["ready"]
+    repo_path: "~/code/myorg"
 EOF
 }
 
-create_minimal_config() {
-  cat > "$OCDC_POLLS_DIR/minimal.yaml" << 'EOF'
-id: minimal
-enabled: true
+create_valid_github_pr_config() {
+  cat > "$OCDC_POLLS_DIR/github-reviews.yaml" << 'EOF'
+id: github-reviews
+source_type: github_pr
 
-fetch_command: echo '[]'
-
-item_mapping:
-  key: '"\(.id)"'
-
-prompt:
-  template: "Work on {key}"
-
-session:
-  name_template: "ocdc-{key}"
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
 EOF
 }
 
-create_config_with_prompt_file() {
-  mkdir -p "$OCDC_POLLS_DIR/prompts"
-  cat > "$OCDC_POLLS_DIR/prompts/work.md" << 'EOF'
-Work on issue #{number}: {title}
-{url}
+create_config_with_fetch_options() {
+  cat > "$OCDC_POLLS_DIR/with-fetch-options.yaml" << 'EOF'
+id: with-fetch-options
+source_type: github_issue
+
+fetch:
+  assignee: "@me"
+  state: "open"
+  labels: ["ready", "approved"]
+
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
 EOF
+}
 
-  cat > "$OCDC_POLLS_DIR/with-prompt-file.yaml" << 'EOF'
-id: with-prompt-file
-enabled: true
+create_config_with_fetch_command() {
+  cat > "$OCDC_POLLS_DIR/with-fetch-command.yaml" << 'EOF'
+id: with-fetch-command
+source_type: github_issue
 
-fetch_command: echo '[]'
+fetch_command: "gh issue list --repo myorg/backend --json number,title"
 
-item_mapping:
-  key: '"\(.id)"'
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
+EOF
+}
+
+create_config_with_custom_prompt() {
+  cat > "$OCDC_POLLS_DIR/custom-prompt.yaml" << 'EOF'
+id: custom-prompt
+source_type: github_issue
+
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
 
 prompt:
-  file: prompts/work.md
+  template: "Custom prompt for {title} - {url}"
+EOF
+}
+
+create_config_with_custom_session() {
+  cat > "$OCDC_POLLS_DIR/custom-session.yaml" << 'EOF'
+id: custom-session
+source_type: github_issue
+
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
 
 session:
-  name_template: "ocdc-{key}"
+  name_template: "custom-{number}"
+  agent: architect
 EOF
 }
 
@@ -110,103 +134,67 @@ create_disabled_config() {
   cat > "$OCDC_POLLS_DIR/disabled.yaml" << 'EOF'
 id: disabled-poll
 enabled: false
+source_type: github_issue
 
-fetch_command: echo '[]'
-
-item_mapping:
-  key: '"\(.id)"'
-
-prompt:
-  template: "Work"
-
-session:
-  name_template: "ocdc-{key}"
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
 EOF
 }
 
 create_invalid_config_missing_id() {
   cat > "$OCDC_POLLS_DIR/invalid-missing-id.yaml" << 'EOF'
-enabled: true
+source_type: github_issue
 
-fetch_command: echo '[]'
-
-item_mapping:
-  key: '"\(.id)"'
-
-prompt:
-  template: "Work"
-
-session:
-  name_template: "ocdc-{key}"
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
 EOF
 }
 
-create_invalid_config_missing_fetch() {
-  cat > "$OCDC_POLLS_DIR/invalid-missing-fetch.yaml" << 'EOF'
-id: missing-fetch
-enabled: true
+create_invalid_config_missing_source_type() {
+  cat > "$OCDC_POLLS_DIR/invalid-missing-source-type.yaml" << 'EOF'
+id: missing-source-type
 
-item_mapping:
-  key: '"\(.id)"'
-
-prompt:
-  template: "Work"
-
-session:
-  name_template: "ocdc-{key}"
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
 EOF
 }
 
-create_invalid_config_missing_prompt() {
-  cat > "$OCDC_POLLS_DIR/invalid-missing-prompt.yaml" << 'EOF'
-id: missing-prompt
-enabled: true
-
-fetch_command: echo '[]'
-
-item_mapping:
-  key: '"\(.id)"'
-
-session:
-  name_template: "ocdc-{key}"
+create_invalid_config_missing_repo_filters() {
+  cat > "$OCDC_POLLS_DIR/invalid-missing-repo-filters.yaml" << 'EOF'
+id: missing-repo-filters
+source_type: github_issue
 EOF
 }
 
-create_invalid_config_missing_session() {
-  cat > "$OCDC_POLLS_DIR/invalid-missing-session.yaml" << 'EOF'
-id: missing-session
-enabled: true
-
-fetch_command: echo '[]'
-
-item_mapping:
-  key: '"\(.id)"'
-
-prompt:
-  template: "Work"
+create_invalid_config_empty_repo_filters() {
+  cat > "$OCDC_POLLS_DIR/invalid-empty-repo-filters.yaml" << 'EOF'
+id: empty-repo-filters
+source_type: github_issue
+repo_filters: []
 EOF
 }
 
-create_invalid_config_missing_key_mapping() {
-  cat > "$OCDC_POLLS_DIR/invalid-missing-key.yaml" << 'EOF'
-id: missing-key
-enabled: true
+create_invalid_config_both_fetch() {
+  cat > "$OCDC_POLLS_DIR/invalid-both-fetch.yaml" << 'EOF'
+id: both-fetch
+source_type: github_issue
 
-fetch_command: echo '[]'
+fetch:
+  assignee: "@me"
 
-item_mapping:
-  number: '.number'
+fetch_command: "gh issue list"
 
-prompt:
-  template: "Work"
-
-session:
-  name_template: "ocdc-{key}"
+repo_filters:
+  - repo: "myorg/backend"
+    repo_path: "~/code/backend"
 EOF
 }
 
 # =============================================================================
-# Tests
+# Basic Tests
 # =============================================================================
 
 test_poll_config_library_exists() {
@@ -225,34 +213,38 @@ test_poll_config_can_be_sourced() {
   return 0
 }
 
-test_validate_valid_config() {
+# =============================================================================
+# Validation Tests
+# =============================================================================
+
+test_validate_linear_config() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_config
+  create_valid_linear_config
+  
+  if ! poll_config_validate "$OCDC_POLLS_DIR/linear-issues.yaml"; then
+    echo "Valid Linear config should pass validation"
+    return 1
+  fi
+  return 0
+}
+
+test_validate_github_issue_config() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_valid_github_issue_config
   
   if ! poll_config_validate "$OCDC_POLLS_DIR/github-issues.yaml"; then
-    echo "Valid config should pass validation"
+    echo "Valid GitHub issue config should pass validation"
     return 1
   fi
   return 0
 }
 
-test_validate_minimal_config() {
+test_validate_github_pr_config() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_minimal_config
+  create_valid_github_pr_config
   
-  if ! poll_config_validate "$OCDC_POLLS_DIR/minimal.yaml"; then
-    echo "Minimal valid config should pass validation"
-    return 1
-  fi
-  return 0
-}
-
-test_validate_config_with_prompt_file() {
-  source "$LIB_DIR/ocdc-poll-config.bash"
-  create_config_with_prompt_file
-  
-  if ! poll_config_validate "$OCDC_POLLS_DIR/with-prompt-file.yaml"; then
-    echo "Config with prompt file should pass validation"
+  if ! poll_config_validate "$OCDC_POLLS_DIR/github-reviews.yaml"; then
+    echo "Valid GitHub PR config should pass validation"
     return 1
   fi
   return 0
@@ -269,86 +261,507 @@ test_validate_rejects_missing_id() {
   return 0
 }
 
-test_validate_rejects_missing_fetch() {
+test_validate_rejects_missing_source_type() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_invalid_config_missing_fetch
+  create_invalid_config_missing_source_type
   
-  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-fetch.yaml" 2>/dev/null; then
-    echo "Config missing 'fetch_command' should fail validation"
+  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-source-type.yaml" 2>/dev/null; then
+    echo "Config missing 'source_type' should fail validation"
     return 1
   fi
   return 0
 }
 
-test_validate_rejects_missing_prompt() {
+test_validate_rejects_missing_repo_filters() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_invalid_config_missing_prompt
+  create_invalid_config_missing_repo_filters
   
-  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-prompt.yaml" 2>/dev/null; then
-    echo "Config missing 'prompt' should fail validation"
+  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-repo-filters.yaml" 2>/dev/null; then
+    echo "Config missing 'repo_filters' should fail validation"
     return 1
   fi
   return 0
 }
 
-test_validate_rejects_missing_session() {
+test_validate_rejects_empty_repo_filters() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_invalid_config_missing_session
+  create_invalid_config_empty_repo_filters
   
-  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-session.yaml" 2>/dev/null; then
-    echo "Config missing 'session' should fail validation"
+  if poll_config_validate "$OCDC_POLLS_DIR/invalid-empty-repo-filters.yaml" 2>/dev/null; then
+    echo "Config with empty 'repo_filters' should fail validation"
     return 1
   fi
   return 0
 }
 
-test_validate_rejects_missing_key_mapping() {
+test_validate_rejects_both_fetch_options() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_invalid_config_missing_key_mapping
+  create_invalid_config_both_fetch
   
-  if poll_config_validate "$OCDC_POLLS_DIR/invalid-missing-key.yaml" 2>/dev/null; then
-    echo "Config missing 'item_mapping.key' should fail validation"
+  if poll_config_validate "$OCDC_POLLS_DIR/invalid-both-fetch.yaml" 2>/dev/null; then
+    echo "Config with both 'fetch' and 'fetch_command' should fail validation"
     return 1
   fi
   return 0
 }
 
-test_get_config_field() {
+# =============================================================================
+# Default Tests
+# =============================================================================
+
+test_default_item_mapping_linear() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_config
   
-  local id
-  id=$(poll_config_get "$OCDC_POLLS_DIR/github-issues.yaml" ".id")
-  assert_equals "github-issues" "$id"
+  local mapping
+  mapping=$(poll_config_get_default_item_mapping "linear_issue")
+  
+  # Check key fields exist
+  if ! echo "$mapping" | jq -e '.key' >/dev/null; then
+    echo "Linear mapping should have .key"
+    return 1
+  fi
+  if ! echo "$mapping" | jq -e '.url' >/dev/null; then
+    echo "Linear mapping should have .url"
+    return 1
+  fi
+  return 0
 }
 
-test_get_config_nested_field() {
+test_default_item_mapping_github_issue() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_config
   
-  local session_name
-  session_name=$(poll_config_get "$OCDC_POLLS_DIR/github-issues.yaml" ".session.name_template")
-  assert_equals 'ocdc-{repo_short}-issue-{number}' "$session_name"
+  local mapping
+  mapping=$(poll_config_get_default_item_mapping "github_issue")
+  
+  if ! echo "$mapping" | jq -e '.key' >/dev/null; then
+    echo "GitHub issue mapping should have .key"
+    return 1
+  fi
+  return 0
 }
 
-test_get_config_enabled_defaults_to_true() {
+test_default_prompt_linear() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_minimal_config
   
-  local enabled
-  enabled=$(poll_config_get_with_default "$OCDC_POLLS_DIR/minimal.yaml" ".enabled" "true")
-  assert_equals "true" "$enabled"
+  local prompt
+  prompt=$(poll_config_get_default_prompt "linear_issue")
+  
+  if [[ "$prompt" != *"Linear"* ]]; then
+    echo "Linear default prompt should mention Linear"
+    return 1
+  fi
+  return 0
 }
+
+test_default_prompt_github_pr() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local prompt
+  prompt=$(poll_config_get_default_prompt "github_pr")
+  
+  if [[ "$prompt" != *"Review"* ]]; then
+    echo "GitHub PR default prompt should mention Review"
+    return 1
+  fi
+  return 0
+}
+
+test_default_session_name_linear() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local name
+  name=$(poll_config_get_default_session_name "linear_issue")
+  
+  if [[ "$name" != *"linear"* ]]; then
+    echo "Linear default session name should contain 'linear'"
+    return 1
+  fi
+  return 0
+}
+
+test_default_agent_github_pr() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local agent
+  agent=$(poll_config_get_default_agent "github_pr")
+  
+  assert_equals "plan" "$agent"
+}
+
+test_default_agent_github_issue() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local agent
+  agent=$(poll_config_get_default_agent "github_issue")
+  
+  assert_equals "build" "$agent"
+}
+
+# =============================================================================
+# Fetch Command Building Tests
+# =============================================================================
+
+test_build_fetch_command_linear() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local cmd
+  cmd=$(poll_config_build_fetch_command "linear_issue" '{}')
+  
+  if [[ "$cmd" != *"linear"* ]]; then
+    echo "Linear fetch command should use linear CLI: $cmd"
+    return 1
+  fi
+  if [[ "$cmd" != *"--mine"* ]]; then
+    echo "Linear fetch command should include --mine: $cmd"
+    return 1
+  fi
+  return 0
+}
+
+test_build_fetch_command_github_issue() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local cmd
+  cmd=$(poll_config_build_fetch_command "github_issue" '{}')
+  
+  if [[ "$cmd" != *"gh search issues"* ]]; then
+    echo "GitHub issue fetch command should use gh search issues: $cmd"
+    return 1
+  fi
+  if [[ "$cmd" != *"--assignee=@me"* ]]; then
+    echo "GitHub issue fetch command should include --assignee=@me: $cmd"
+    return 1
+  fi
+  return 0
+}
+
+test_build_fetch_command_github_pr() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local cmd
+  cmd=$(poll_config_build_fetch_command "github_pr" '{}')
+  
+  if [[ "$cmd" != *"gh search prs"* ]]; then
+    echo "GitHub PR fetch command should use gh search prs: $cmd"
+    return 1
+  fi
+  if [[ "$cmd" != *"--review-requested=@me"* ]]; then
+    echo "GitHub PR fetch command should include --review-requested=@me: $cmd"
+    return 1
+  fi
+  return 0
+}
+
+test_build_fetch_command_with_options() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local cmd
+  cmd=$(poll_config_build_fetch_command "github_issue" '{"repo":"myorg/backend","labels":["ready"]}')
+  
+  if [[ "$cmd" != *"--repo="* ]] || [[ "$cmd" != *"myorg/backend"* ]]; then
+    echo "GitHub issue fetch command should include --repo: $cmd"
+    return 1
+  fi
+  if [[ "$cmd" != *"--label="* ]] || [[ "$cmd" != *"ready"* ]]; then
+    echo "GitHub issue fetch command should include --label: $cmd"
+    return 1
+  fi
+  return 0
+}
+
+test_build_fetch_command_escapes_special_chars() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  # Test that shell metacharacters are properly escaped
+  local cmd
+  cmd=$(poll_config_build_fetch_command "github_issue" '{"repo":"myorg/back$end","labels":["re;ady"]}')
+  
+  # The command should contain escaped versions of the special characters
+  # printf %q escapes $ as \$ and ; as \;
+  if [[ "$cmd" != *'back\$end'* ]]; then
+    echo "GitHub issue fetch command should escape \$ in repo: $cmd"
+    return 1
+  fi
+  if [[ "$cmd" != *'re\;ady'* ]]; then
+    echo "GitHub issue fetch command should escape ; in labels: $cmd"
+    return 1
+  fi
+  return 0
+}
+
+test_build_fetch_command_state_validation() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  # Test that invalid state values default to 'open'
+  local cmd
+  cmd=$(poll_config_build_fetch_command "github_issue" '{"state":"malicious; rm -rf /"}')
+  
+  # Should use default state, not the malicious value
+  if [[ "$cmd" == *"malicious"* ]]; then
+    echo "GitHub issue fetch command should validate state: $cmd"
+    return 1
+  fi
+  if [[ "$cmd" != *"--state=open"* ]]; then
+    echo "GitHub issue fetch command should default to open state: $cmd"
+    return 1
+  fi
+  return 0
+}
+
+# =============================================================================
+# Repo Filter Matching Tests
+# =============================================================================
+
+test_match_repo_filter_team_only() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local item='{"team":{"key":"ENG"}}'
+  local filters='[{"team":"ENG","repo_path":"~/code/eng"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  assert_equals "~/code/eng" "$result"
+}
+
+test_match_repo_filter_labels_only() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local item='{"labels":[{"name":"backend"}]}'
+  local filters='[{"labels":["backend"],"repo_path":"~/code/backend"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  assert_equals "~/code/backend" "$result"
+}
+
+test_match_repo_filter_case_insensitive() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local item='{"team":{"key":"eng"}}'
+  local filters='[{"team":"ENG","repo_path":"~/code/eng"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  assert_equals "~/code/eng" "$result"
+}
+
+test_match_repo_filter_specificity() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  # Item has both team and label
+  local item='{"team":{"key":"ENG"},"labels":[{"name":"backend"}]}'
+  
+  # Filters: team+label is more specific than team only
+  local filters='[
+    {"team":"ENG","repo_path":"~/code/eng-default"},
+    {"team":"ENG","labels":["backend"],"repo_path":"~/code/eng-backend"}
+  ]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  # Should match the more specific rule (team+labels)
+  assert_equals "~/code/eng-backend" "$result"
+}
+
+test_match_repo_filter_no_match() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local item='{"team":{"key":"PROD"}}'
+  local filters='[{"team":"ENG","repo_path":"~/code/eng"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  # Should return empty string for no match
+  assert_equals "" "$result"
+}
+
+test_match_repo_filter_github_repo() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local item='{"repository":{"full_name":"myorg/backend","name":"backend","owner":{"login":"myorg"}}}'
+  local filters='[{"repo":"myorg/backend","repo_path":"~/code/backend"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  assert_equals "~/code/backend" "$result"
+}
+
+test_match_repo_filter_github_org() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  local item='{"repository":{"full_name":"myorg/frontend","name":"frontend","owner":{"login":"myorg"}}}'
+  local filters='[{"org":"myorg","repo_path":"~/code/myorg"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  assert_equals "~/code/myorg" "$result"
+}
+
+test_match_repo_filter_catch_all() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  # Filter with only repo_path acts as catch-all
+  local item='{"team":{"key":"UNKNOWN"}}'
+  local filters='[{"repo_path":"~/code/default"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  # Should match the catch-all filter
+  assert_equals "~/code/default" "$result"
+}
+
+test_match_repo_filter_multiple_labels_any() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  # Item has only one of the filter labels - should still match (ANY semantics)
+  local item='{"labels":[{"name":"frontend"}]}'
+  local filters='[{"labels":["backend","frontend","api"],"repo_path":"~/code/services"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  assert_equals "~/code/services" "$result"
+}
+
+test_match_repo_filter_item_missing_fields() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  
+  # Item with null/missing nested fields
+  local item='{"repository":null,"team":null}'
+  local filters='[{"team":"ENG","repo_path":"~/code/eng"}]'
+  
+  local result
+  result=$(poll_config_match_repo_filter "$item" "$filters")
+  
+  # Should return empty (no match)
+  assert_equals "" "$result"
+}
+
+# =============================================================================
+# Effective Config Tests
+# =============================================================================
+
+test_effective_fetch_command_from_options() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_config_with_fetch_options
+  
+  local cmd
+  cmd=$(poll_config_get_effective_fetch_command "$OCDC_POLLS_DIR/with-fetch-options.yaml")
+  
+  if [[ "$cmd" != *"gh search issues"* ]]; then
+    echo "Should build fetch command from options: $cmd"
+    return 1
+  fi
+  return 0
+}
+
+test_effective_fetch_command_override() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_config_with_fetch_command
+  
+  local cmd
+  cmd=$(poll_config_get_effective_fetch_command "$OCDC_POLLS_DIR/with-fetch-command.yaml")
+  
+  if [[ "$cmd" != "gh issue list --repo myorg/backend --json number,title" ]]; then
+    echo "Should use explicit fetch_command: $cmd"
+    return 1
+  fi
+  return 0
+}
+
+test_effective_prompt_default() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_valid_github_issue_config
+  
+  local prompt
+  prompt=$(poll_config_get_effective_prompt "$OCDC_POLLS_DIR/github-issues.yaml")
+  
+  if [[ "$prompt" != *"Work on issue"* ]]; then
+    echo "Should use default prompt: $prompt"
+    return 1
+  fi
+  return 0
+}
+
+test_effective_prompt_custom() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_config_with_custom_prompt
+  
+  local prompt
+  prompt=$(poll_config_get_effective_prompt "$OCDC_POLLS_DIR/custom-prompt.yaml")
+  
+  if [[ "$prompt" != *"Custom prompt"* ]]; then
+    echo "Should use custom prompt: $prompt"
+    return 1
+  fi
+  return 0
+}
+
+test_effective_session_name_default() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_valid_github_issue_config
+  
+  local name
+  name=$(poll_config_get_effective_session_name "$OCDC_POLLS_DIR/github-issues.yaml")
+  
+  if [[ "$name" != *"issue"* ]]; then
+    echo "Should use default session name: $name"
+    return 1
+  fi
+  return 0
+}
+
+test_effective_session_name_custom() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_config_with_custom_session
+  
+  local name
+  name=$(poll_config_get_effective_session_name "$OCDC_POLLS_DIR/custom-session.yaml")
+  
+  assert_equals "custom-{number}" "$name"
+}
+
+test_effective_agent_default() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_valid_github_pr_config
+  
+  local agent
+  agent=$(poll_config_get_effective_agent "$OCDC_POLLS_DIR/github-reviews.yaml")
+  
+  # GitHub PR default is 'plan'
+  assert_equals "plan" "$agent"
+}
+
+test_effective_agent_custom() {
+  source "$LIB_DIR/ocdc-poll-config.bash"
+  create_config_with_custom_session
+  
+  local agent
+  agent=$(poll_config_get_effective_agent "$OCDC_POLLS_DIR/custom-session.yaml")
+  
+  assert_equals "architect" "$agent"
+}
+
+# =============================================================================
+# Config Listing Tests
+# =============================================================================
 
 test_list_all_configs() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_config
+  create_valid_github_issue_config
   create_disabled_config
   
   local configs
   configs=$(poll_config_list "$OCDC_POLLS_DIR")
   
-  # Should find both configs
   if [[ "$configs" != *"github-issues.yaml"* ]]; then
     echo "Should list github-issues.yaml"
     return 1
@@ -362,13 +775,12 @@ test_list_all_configs() {
 
 test_list_enabled_configs_only() {
   source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_config      # enabled: true
-  create_disabled_config   # enabled: false
+  create_valid_github_issue_config  # enabled by default
+  create_disabled_config            # enabled: false
   
   local configs
   configs=$(poll_config_list_enabled "$OCDC_POLLS_DIR")
   
-  # Should only find enabled config
   if [[ "$configs" != *"github-issues.yaml"* ]]; then
     echo "Should list enabled github-issues.yaml"
     return 1
@@ -379,6 +791,10 @@ test_list_enabled_configs_only() {
   fi
   return 0
 }
+
+# =============================================================================
+# Template Rendering Tests
+# =============================================================================
 
 test_render_template_simple() {
   source "$LIB_DIR/ocdc-poll-config.bash"
@@ -412,81 +828,6 @@ test_render_template_preserves_unknown_vars() {
   assert_equals "Known: value, Unknown: {unknown}" "$result"
 }
 
-test_load_prompt_from_template() {
-  source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_config
-  
-  local prompt
-  prompt=$(poll_config_get_prompt "$OCDC_POLLS_DIR/github-issues.yaml")
-  
-  if [[ "$prompt" != *"Work on issue"* ]]; then
-    echo "Should load prompt template"
-    return 1
-  fi
-  return 0
-}
-
-test_load_prompt_from_file() {
-  source "$LIB_DIR/ocdc-poll-config.bash"
-  create_config_with_prompt_file
-  
-  local prompt
-  prompt=$(poll_config_get_prompt "$OCDC_POLLS_DIR/with-prompt-file.yaml")
-  
-  if [[ "$prompt" != *"Work on issue"* ]]; then
-    echo "Should load prompt from file"
-    return 1
-  fi
-  return 0
-}
-
-# =============================================================================
-# Schema Validation Tests (requires check-jsonschema)
-# =============================================================================
-
-test_validate_against_schema_valid() {
-  # Skip if check-jsonschema not available
-  if ! command -v check-jsonschema >/dev/null 2>&1; then
-    return 0
-  fi
-  
-  source "$LIB_DIR/ocdc-poll-config.bash"
-  create_valid_config
-  
-  local schema_file
-  schema_file="$(dirname "$LIB_DIR")/share/ocdc/poll-config.schema.json"
-  
-  if [[ ! -f "$schema_file" ]]; then
-    echo "Schema file not found: $schema_file"
-    return 1
-  fi
-  
-  if ! poll_config_validate_schema "$OCDC_POLLS_DIR/github-issues.yaml" "$schema_file"; then
-    echo "Valid config should pass schema validation"
-    return 1
-  fi
-  return 0
-}
-
-test_validate_against_schema_invalid() {
-  # Skip if check-jsonschema not available
-  if ! command -v check-jsonschema >/dev/null 2>&1; then
-    return 0
-  fi
-  
-  source "$LIB_DIR/ocdc-poll-config.bash"
-  create_invalid_config_missing_id
-  
-  local schema_file
-  schema_file="$(dirname "$LIB_DIR")/share/ocdc/poll-config.schema.json"
-  
-  if poll_config_validate_schema "$OCDC_POLLS_DIR/invalid-missing-id.yaml" "$schema_file" 2>/dev/null; then
-    echo "Invalid config should fail schema validation"
-    return 1
-  fi
-  return 0
-}
-
 # =============================================================================
 # Run Tests
 # =============================================================================
@@ -496,26 +837,50 @@ echo "Poll Configuration Tests:"
 for test_func in \
   test_poll_config_library_exists \
   test_poll_config_can_be_sourced \
-  test_validate_valid_config \
-  test_validate_minimal_config \
-  test_validate_config_with_prompt_file \
+  test_validate_linear_config \
+  test_validate_github_issue_config \
+  test_validate_github_pr_config \
   test_validate_rejects_missing_id \
-  test_validate_rejects_missing_fetch \
-  test_validate_rejects_missing_prompt \
-  test_validate_rejects_missing_session \
-  test_validate_rejects_missing_key_mapping \
-  test_get_config_field \
-  test_get_config_nested_field \
-  test_get_config_enabled_defaults_to_true \
+  test_validate_rejects_missing_source_type \
+  test_validate_rejects_missing_repo_filters \
+  test_validate_rejects_empty_repo_filters \
+  test_validate_rejects_both_fetch_options \
+  test_default_item_mapping_linear \
+  test_default_item_mapping_github_issue \
+  test_default_prompt_linear \
+  test_default_prompt_github_pr \
+  test_default_session_name_linear \
+  test_default_agent_github_pr \
+  test_default_agent_github_issue \
+  test_build_fetch_command_linear \
+  test_build_fetch_command_github_issue \
+  test_build_fetch_command_github_pr \
+  test_build_fetch_command_with_options \
+  test_build_fetch_command_escapes_special_chars \
+  test_build_fetch_command_state_validation \
+  test_match_repo_filter_team_only \
+  test_match_repo_filter_labels_only \
+  test_match_repo_filter_case_insensitive \
+  test_match_repo_filter_specificity \
+  test_match_repo_filter_no_match \
+  test_match_repo_filter_github_repo \
+  test_match_repo_filter_github_org \
+  test_match_repo_filter_catch_all \
+  test_match_repo_filter_multiple_labels_any \
+  test_match_repo_filter_item_missing_fields \
+  test_effective_fetch_command_from_options \
+  test_effective_fetch_command_override \
+  test_effective_prompt_default \
+  test_effective_prompt_custom \
+  test_effective_session_name_default \
+  test_effective_session_name_custom \
+  test_effective_agent_default \
+  test_effective_agent_custom \
   test_list_all_configs \
   test_list_enabled_configs_only \
   test_render_template_simple \
   test_render_template_multiple_vars \
-  test_render_template_preserves_unknown_vars \
-  test_load_prompt_from_template \
-  test_load_prompt_from_file \
-  test_validate_against_schema_valid \
-  test_validate_against_schema_invalid
+  test_render_template_preserves_unknown_vars
 do
   setup
   run_test "${test_func#test_}" "$test_func"

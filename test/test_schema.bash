@@ -40,7 +40,7 @@ teardown() {
 }
 
 # =============================================================================
-# Tests
+# Schema Structure Tests
 # =============================================================================
 
 test_schema_file_exists() {
@@ -54,6 +54,24 @@ test_schema_file_exists() {
 test_schema_is_valid_json() {
   if ! jq empty "$SCHEMA_FILE" 2>/dev/null; then
     echo "Schema file is not valid JSON"
+    return 1
+  fi
+  return 0
+}
+
+# =============================================================================
+# Example Config Tests
+# =============================================================================
+
+test_linear_assigned_example_validates() {
+  local example="$EXAMPLES_DIR/linear-assigned.yaml"
+  if [[ ! -f "$example" ]]; then
+    echo "Example file does not exist: $example"
+    return 1
+  fi
+  
+  if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$example" 2>&1; then
+    echo "linear-assigned.yaml should validate against schema"
     return 1
   fi
   return 0
@@ -87,17 +105,17 @@ test_github_pr_reviews_example_validates() {
   return 0
 }
 
+# =============================================================================
+# Required Field Tests
+# =============================================================================
+
 test_schema_rejects_missing_id() {
   local invalid_config="$TEST_DIR/invalid-missing-id.yaml"
   cat > "$invalid_config" << 'EOF'
-enabled: true
-fetch_command: echo '[]'
-item_mapping:
-  key: '"\(.id)"'
-prompt:
-  template: "Work"
-session:
-  name_template: "ocdc-{key}"
+source_type: github_issue
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
 EOF
 
   if check-jsonschema --schemafile "$SCHEMA_FILE" "$invalid_config" 2>/dev/null; then
@@ -107,181 +125,276 @@ EOF
   return 0
 }
 
-test_schema_rejects_missing_fetch_command() {
-  local invalid_config="$TEST_DIR/invalid-missing-fetch.yaml"
+test_schema_rejects_missing_source_type() {
+  local invalid_config="$TEST_DIR/invalid-missing-source-type.yaml"
   cat > "$invalid_config" << 'EOF'
 id: test
-enabled: true
-item_mapping:
-  key: '"\(.id)"'
-prompt:
-  template: "Work"
-session:
-  name_template: "ocdc-{key}"
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
 EOF
 
   if check-jsonschema --schemafile "$SCHEMA_FILE" "$invalid_config" 2>/dev/null; then
-    echo "Config missing 'fetch_command' should fail schema validation"
+    echo "Config missing 'source_type' should fail schema validation"
     return 1
   fi
   return 0
 }
 
-test_schema_rejects_missing_item_mapping() {
-  local invalid_config="$TEST_DIR/invalid-missing-mapping.yaml"
+test_schema_rejects_missing_repo_filters() {
+  local invalid_config="$TEST_DIR/invalid-missing-repo-filters.yaml"
   cat > "$invalid_config" << 'EOF'
 id: test
-enabled: true
-fetch_command: echo '[]'
-prompt:
-  template: "Work"
-session:
-  name_template: "ocdc-{key}"
+source_type: github_issue
 EOF
 
   if check-jsonschema --schemafile "$SCHEMA_FILE" "$invalid_config" 2>/dev/null; then
-    echo "Config missing 'item_mapping' should fail schema validation"
+    echo "Config missing 'repo_filters' should fail schema validation"
     return 1
   fi
   return 0
 }
 
-test_schema_rejects_missing_prompt() {
-  local invalid_config="$TEST_DIR/invalid-missing-prompt.yaml"
+test_schema_rejects_empty_repo_filters() {
+  local invalid_config="$TEST_DIR/invalid-empty-repo-filters.yaml"
   cat > "$invalid_config" << 'EOF'
 id: test
-enabled: true
-fetch_command: echo '[]'
-item_mapping:
-  key: '"\(.id)"'
-session:
-  name_template: "ocdc-{key}"
+source_type: github_issue
+repo_filters: []
 EOF
 
   if check-jsonschema --schemafile "$SCHEMA_FILE" "$invalid_config" 2>/dev/null; then
-    echo "Config missing 'prompt' should fail schema validation"
+    echo "Config with empty 'repo_filters' should fail schema validation"
     return 1
   fi
   return 0
 }
 
-test_schema_rejects_missing_session() {
-  local invalid_config="$TEST_DIR/invalid-missing-session.yaml"
+test_schema_rejects_invalid_source_type() {
+  local invalid_config="$TEST_DIR/invalid-source-type.yaml"
   cat > "$invalid_config" << 'EOF'
 id: test
-enabled: true
-fetch_command: echo '[]'
-item_mapping:
-  key: '"\(.id)"'
-prompt:
-  template: "Work"
+source_type: invalid_type
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
 EOF
 
   if check-jsonschema --schemafile "$SCHEMA_FILE" "$invalid_config" 2>/dev/null; then
-    echo "Config missing 'session' should fail schema validation"
+    echo "Config with invalid 'source_type' should fail schema validation"
     return 1
   fi
   return 0
 }
 
-test_schema_rejects_missing_item_mapping_key() {
-  local invalid_config="$TEST_DIR/invalid-missing-key.yaml"
+test_schema_rejects_repo_filter_missing_repo_path() {
+  local invalid_config="$TEST_DIR/invalid-filter-missing-path.yaml"
   cat > "$invalid_config" << 'EOF'
 id: test
-enabled: true
-fetch_command: echo '[]'
-item_mapping:
-  number: '.number'
-prompt:
-  template: "Work"
-session:
-  name_template: "ocdc-{key}"
+source_type: github_issue
+repo_filters:
+  - repo: "owner/repo"
 EOF
 
   if check-jsonschema --schemafile "$SCHEMA_FILE" "$invalid_config" 2>/dev/null; then
-    echo "Config missing 'item_mapping.key' should fail schema validation"
+    echo "Repo filter missing 'repo_path' should fail schema validation"
     return 1
   fi
   return 0
 }
 
-test_schema_rejects_missing_session_name_template() {
-  local invalid_config="$TEST_DIR/invalid-missing-name.yaml"
-  cat > "$invalid_config" << 'EOF'
-id: test
-enabled: true
-fetch_command: echo '[]'
-item_mapping:
-  key: '"\(.id)"'
-prompt:
-  template: "Work"
-session:
-  agent: plan
-EOF
+# =============================================================================
+# Valid Config Tests
+# =============================================================================
 
-  if check-jsonschema --schemafile "$SCHEMA_FILE" "$invalid_config" 2>/dev/null; then
-    echo "Config missing 'session.name_template' should fail schema validation"
-    return 1
-  fi
-  return 0
-}
-
-test_schema_accepts_minimal_valid_config() {
-  local valid_config="$TEST_DIR/minimal-valid.yaml"
+test_schema_accepts_minimal_linear_config() {
+  local valid_config="$TEST_DIR/minimal-linear.yaml"
   cat > "$valid_config" << 'EOF'
-id: minimal
-fetch_command: echo '[]'
-item_mapping:
-  key: '"\(.id)"'
-prompt:
-  template: "Work"
-session:
-  name_template: "ocdc-{key}"
+id: linear-test
+source_type: linear_issue
+repo_filters:
+  - team: "ENG"
+    repo_path: "~/code/eng"
 EOF
 
   if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
-    echo "Minimal valid config should pass schema validation"
+    echo "Minimal Linear config should pass schema validation"
     return 1
   fi
   return 0
 }
 
-test_schema_accepts_config_with_agent() {
-  local valid_config="$TEST_DIR/with-agent.yaml"
+test_schema_accepts_minimal_github_issue_config() {
+  local valid_config="$TEST_DIR/minimal-github-issue.yaml"
   cat > "$valid_config" << 'EOF'
-id: with-agent
-fetch_command: echo '[]'
-item_mapping:
-  key: '"\(.id)"'
-prompt:
-  template: "Work"
-session:
-  name_template: "ocdc-{key}"
-  agent: build
+id: github-test
+source_type: github_issue
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
 EOF
 
   if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
-    echo "Config with agent should pass schema validation"
+    echo "Minimal GitHub issue config should pass schema validation"
     return 1
   fi
   return 0
 }
 
-test_schema_accepts_config_with_prompt_file() {
-  local valid_config="$TEST_DIR/with-prompt-file.yaml"
+test_schema_accepts_minimal_github_pr_config() {
+  local valid_config="$TEST_DIR/minimal-github-pr.yaml"
   cat > "$valid_config" << 'EOF'
-id: with-prompt-file
-fetch_command: echo '[]'
-item_mapping:
-  key: '"\(.id)"'
-prompt:
-  file: prompts/work.md
-session:
-  name_template: "ocdc-{key}"
+id: github-pr-test
+source_type: github_pr
+repo_filters:
+  - org: "myorg"
+    repo_path: "~/code/myorg"
 EOF
 
   if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
-    echo "Config with prompt file should pass schema validation"
+    echo "Minimal GitHub PR config should pass schema validation"
+    return 1
+  fi
+  return 0
+}
+
+test_schema_accepts_config_with_fetch_options() {
+  local valid_config="$TEST_DIR/with-fetch-options.yaml"
+  cat > "$valid_config" << 'EOF'
+id: with-fetch
+source_type: github_issue
+fetch:
+  assignee: "@me"
+  state: "open"
+  labels: ["ready"]
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
+EOF
+
+  if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
+    echo "Config with fetch options should pass schema validation"
+    return 1
+  fi
+  return 0
+}
+
+test_schema_accepts_config_with_fetch_command() {
+  local valid_config="$TEST_DIR/with-fetch-command.yaml"
+  cat > "$valid_config" << 'EOF'
+id: with-fetch-command
+source_type: github_issue
+fetch_command: "gh issue list --json number,title"
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
+EOF
+
+  if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
+    echo "Config with fetch_command should pass schema validation"
+    return 1
+  fi
+  return 0
+}
+
+test_schema_accepts_config_with_multiple_repo_filters() {
+  local valid_config="$TEST_DIR/multiple-filters.yaml"
+  cat > "$valid_config" << 'EOF'
+id: multi-filter
+source_type: linear_issue
+repo_filters:
+  - team: "ENG"
+    labels: ["backend"]
+    repo_path: "~/code/backend"
+  - team: "ENG"
+    labels: ["frontend"]
+    repo_path: "~/code/frontend"
+  - team: "ENG"
+    repo_path: "~/code/eng-default"
+EOF
+
+  if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
+    echo "Config with multiple repo_filters should pass schema validation"
+    return 1
+  fi
+  return 0
+}
+
+test_schema_accepts_config_with_all_filter_criteria() {
+  local valid_config="$TEST_DIR/all-criteria.yaml"
+  cat > "$valid_config" << 'EOF'
+id: all-criteria
+source_type: github_issue
+repo_filters:
+  - repo: "owner/repo"
+    org: "owner"
+    labels: ["ready", "approved"]
+    project: "Q1"
+    milestone: "v1.0"
+    repo_path: "~/code/repo"
+EOF
+
+  if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
+    echo "Config with all filter criteria should pass schema validation"
+    return 1
+  fi
+  return 0
+}
+
+test_schema_accepts_config_with_custom_prompt() {
+  local valid_config="$TEST_DIR/custom-prompt.yaml"
+  cat > "$valid_config" << 'EOF'
+id: custom-prompt
+source_type: github_issue
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
+prompt:
+  template: "Custom prompt for {title}"
+EOF
+
+  if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
+    echo "Config with custom prompt should pass schema validation"
+    return 1
+  fi
+  return 0
+}
+
+test_schema_accepts_config_with_custom_session() {
+  local valid_config="$TEST_DIR/custom-session.yaml"
+  cat > "$valid_config" << 'EOF'
+id: custom-session
+source_type: github_issue
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
+session:
+  name_template: "custom-{number}"
+  agent: architect
+EOF
+
+  if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
+    echo "Config with custom session should pass schema validation"
+    return 1
+  fi
+  return 0
+}
+
+test_schema_accepts_config_with_custom_item_mapping() {
+  local valid_config="$TEST_DIR/custom-mapping.yaml"
+  cat > "$valid_config" << 'EOF'
+id: custom-mapping
+source_type: github_issue
+repo_filters:
+  - repo: "owner/repo"
+    repo_path: "~/code/repo"
+item_mapping:
+  key: ".custom_id"
+  branch: ".custom_branch"
+EOF
+
+  if ! check-jsonschema --schemafile "$SCHEMA_FILE" "$valid_config" 2>&1; then
+    echo "Config with custom item_mapping should pass schema validation"
     return 1
   fi
   return 0
@@ -303,18 +416,25 @@ echo "Schema Validation Tests:"
 for test_func in \
   test_schema_file_exists \
   test_schema_is_valid_json \
+  test_linear_assigned_example_validates \
   test_github_issues_example_validates \
   test_github_pr_reviews_example_validates \
   test_schema_rejects_missing_id \
-  test_schema_rejects_missing_fetch_command \
-  test_schema_rejects_missing_item_mapping \
-  test_schema_rejects_missing_prompt \
-  test_schema_rejects_missing_session \
-  test_schema_rejects_missing_item_mapping_key \
-  test_schema_rejects_missing_session_name_template \
-  test_schema_accepts_minimal_valid_config \
-  test_schema_accepts_config_with_agent \
-  test_schema_accepts_config_with_prompt_file
+  test_schema_rejects_missing_source_type \
+  test_schema_rejects_missing_repo_filters \
+  test_schema_rejects_empty_repo_filters \
+  test_schema_rejects_invalid_source_type \
+  test_schema_rejects_repo_filter_missing_repo_path \
+  test_schema_accepts_minimal_linear_config \
+  test_schema_accepts_minimal_github_issue_config \
+  test_schema_accepts_minimal_github_pr_config \
+  test_schema_accepts_config_with_fetch_options \
+  test_schema_accepts_config_with_fetch_command \
+  test_schema_accepts_config_with_multiple_repo_filters \
+  test_schema_accepts_config_with_all_filter_criteria \
+  test_schema_accepts_config_with_custom_prompt \
+  test_schema_accepts_config_with_custom_session \
+  test_schema_accepts_config_with_custom_item_mapping
 do
   setup
   run_test "${test_func#test_}" "$test_func"

@@ -4,7 +4,7 @@
   "title": "OCDC Poll Configuration",
   "description": "Configuration schema for ocdc poll configs that automate devcontainer sessions with OpenCode",
   "type": "object",
-  "required": ["id", "fetch_command", "item_mapping", "prompt", "session"],
+  "required": ["id", "source_type", "repo_filters"],
   "properties": {
     "id": {
       "type": "string",
@@ -17,25 +17,103 @@
     },
     "source_type": {
       "type": "string",
-      "default": "poll",
-      "description": "Source type for tracking (used by opencode plugin). Examples: github_issue, github_pr, linear_issue"
+      "enum": ["linear_issue", "github_issue", "github_pr"],
+      "description": "Source type determines fetch command defaults, item mappings, and prompt templates"
     },
-    "fetch_command": {
-      "type": "string",
-      "description": "Shell command that outputs a JSON array of items to process"
-    },
-    "item_mapping": {
+    "fetch": {
       "type": "object",
-      "description": "jq expressions to extract fields from each item in the fetch_command output",
-      "required": ["key"],
+      "description": "Fetch options (alternative to fetch_command). Options vary by source_type.",
       "properties": {
-        "key": {
+        "assignee": {
           "type": "string",
-          "description": "jq expression for unique item identifier (used to track processed items)"
+          "description": "Filter by assignee. Use @me for current user. (linear_issue, github_issue)"
+        },
+        "review_requested": {
+          "type": "string",
+          "description": "Filter by review requested. Use @me for current user. (github_pr)"
+        },
+        "state": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ],
+          "description": "Filter by state. String for GitHub (open/closed), array for Linear (started/unstarted/etc)"
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Filter to items with these labels (GitHub)"
+        },
+        "exclude_labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Exclude items with these labels (Linear)"
         },
         "repo": {
           "type": "string",
-          "description": "jq expression for full repository name (e.g., 'owner/repo')"
+          "description": "Limit to specific repository (owner/repo format)"
+        },
+        "org": {
+          "type": "string",
+          "description": "Limit to specific organization"
+        }
+      }
+    },
+    "fetch_command": {
+      "type": "string",
+      "description": "Shell command that outputs a JSON array of items. Mutually exclusive with 'fetch'."
+    },
+    "repo_filters": {
+      "type": "array",
+      "description": "Rules for mapping items to local repositories. Most specific rule wins.",
+      "items": {
+        "type": "object",
+        "required": ["repo_path"],
+        "properties": {
+          "team": {
+            "type": "string",
+            "description": "Linear team key to match (case-insensitive)"
+          },
+          "labels": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Labels to match - item must have ANY of these (case-insensitive)"
+          },
+          "repo": {
+            "type": "string",
+            "description": "GitHub repository to match (owner/repo format, case-insensitive)"
+          },
+          "org": {
+            "type": "string",
+            "description": "GitHub organization to match (case-insensitive)"
+          },
+          "project": {
+            "type": "string",
+            "description": "Project name to match (case-insensitive)"
+          },
+          "milestone": {
+            "type": "string",
+            "description": "Milestone name to match (case-insensitive)"
+          },
+          "repo_path": {
+            "type": "string",
+            "description": "Local filesystem path to repository (supports ~ expansion)"
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "item_mapping": {
+      "type": "object",
+      "description": "Optional jq expressions to extract fields. Defaults provided per source_type.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "jq expression for unique item identifier"
+        },
+        "repo": {
+          "type": "string",
+          "description": "jq expression for repository identifier"
         },
         "repo_short": {
           "type": "string",
@@ -43,7 +121,7 @@
         },
         "number": {
           "type": "string",
-          "description": "jq expression for issue/PR number"
+          "description": "jq expression for issue/PR number or identifier"
         },
         "title": {
           "type": "string",
@@ -63,44 +141,34 @@
         }
       }
     },
-    "repo_paths": {
-      "type": "object",
-      "description": "Map of repository names to local filesystem paths",
-      "additionalProperties": {
-        "type": "string",
-        "description": "Local path to repository (supports ~ expansion)"
-      }
-    },
     "prompt": {
       "type": "object",
-      "description": "Prompt configuration for OpenCode sessions",
+      "description": "Optional prompt configuration. Defaults provided per source_type.",
       "oneOf": [
         {
-          "required": ["template"],
-          "additionalProperties": false,
           "properties": {
             "template": {
               "type": "string",
               "description": "Inline prompt template with {variable} placeholders"
             }
-          }
+          },
+          "additionalProperties": false
         },
         {
           "required": ["file"],
-          "additionalProperties": false,
           "properties": {
             "file": {
               "type": "string",
               "description": "Path to prompt file (relative to config directory)"
             }
-          }
+          },
+          "additionalProperties": false
         }
       ]
     },
     "session": {
       "type": "object",
-      "description": "OpenCode session configuration",
-      "required": ["name_template"],
+      "description": "Optional session configuration. Defaults provided per source_type.",
       "properties": {
         "name_template": {
           "type": "string",
@@ -108,37 +176,36 @@
         },
         "agent": {
           "type": "string",
-          "default": "plan",
-          "description": "OpenCode agent to use for the session. Defaults to 'plan' for safety in automated sessions. Other options: 'build', 'architect', or custom agents."
+          "description": "OpenCode agent to use. Defaults: github_pr=plan, others=build"
         }
       }
     }
   },
+  "not": {
+    "required": ["fetch", "fetch_command"],
+    "description": "fetch and fetch_command are mutually exclusive"
+  },
   "examples": [
     {
+      "id": "linear-assigned",
+      "source_type": "linear_issue",
+      "repo_filters": [
+        { "team": "ENG", "repo_path": "~/code/engineering" }
+      ]
+    },
+    {
       "id": "github-issues",
-      "enabled": true,
       "source_type": "github_issue",
-      "fetch_command": "gh issue list --repo OWNER/REPO --label \"ocdc:ready\" --state open --json number,title,body,url | jq '[.[] | . + {repo: \"OWNER/REPO\", repo_short: \"REPO\"}]'",
-      "item_mapping": {
-        "key": "\"\\(.repo)-issue-\\(.number)\"",
-        "repo": ".repo",
-        "repo_short": ".repo_short",
-        "number": ".number",
-        "title": ".title",
-        "body": ".body",
-        "url": ".url",
-        "branch": "\"issue-\\(.number)\""
-      },
-      "repo_paths": {
-        "OWNER/REPO": "~/path/to/repo"
-      },
-      "prompt": {
-        "template": "Work on issue #{number}: {title}\n{url}\n\n{body}"
-      },
-      "session": {
-        "name_template": "ocdc-{repo_short}-issue-{number}"
-      }
+      "repo_filters": [
+        { "repo": "myorg/backend", "repo_path": "~/code/backend" }
+      ]
+    },
+    {
+      "id": "github-reviews",
+      "source_type": "github_pr",
+      "repo_filters": [
+        { "org": "myorg", "repo_path": "~/code/myorg" }
+      ]
     }
   ]
 }

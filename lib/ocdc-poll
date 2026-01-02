@@ -513,12 +513,13 @@ process_poll() {
     return 0
   fi
   
-  # Get fetch command (validated earlier, guaranteed to exist)
+  # Get effective fetch command (built from fetch options or fetch_command)
   local fetch_cmd
-  fetch_cmd=$(poll_config_get "$config_file" ".fetch_command")
+  fetch_cmd=$(poll_config_get_effective_fetch_command "$config_file")
   
   # Execute fetch command
   log "  Fetching items..."
+  [[ "$VERBOSE" == "true" ]] && log "  Command: $fetch_cmd"
   local items_json
   if ! items_json=$(bash -c "$fetch_cmd" 2>&1); then
     log_error "  Fetch command failed: $items_json"
@@ -534,28 +535,31 @@ process_poll() {
     return 0
   fi
   
-  # Get mapping expressions
+  # Get effective mapping expressions (merged with defaults)
+  local item_mapping_json
+  item_mapping_json=$(poll_config_get_effective_item_mapping "$config_file")
+  
   local key_expr repo_expr repo_short_expr number_expr title_expr body_expr url_expr branch_expr
-  key_expr=$(poll_config_get "$config_file" ".item_mapping.key")
-  repo_expr=$(poll_config_get "$config_file" ".item_mapping.repo")
-  repo_short_expr=$(poll_config_get "$config_file" ".item_mapping.repo_short")
-  number_expr=$(poll_config_get "$config_file" ".item_mapping.number")
-  title_expr=$(poll_config_get "$config_file" ".item_mapping.title")
-  body_expr=$(poll_config_get "$config_file" ".item_mapping.body")
-  url_expr=$(poll_config_get "$config_file" ".item_mapping.url")
-  branch_expr=$(poll_config_get "$config_file" ".item_mapping.branch")
+  key_expr=$(echo "$item_mapping_json" | jq -r '.key')
+  repo_expr=$(echo "$item_mapping_json" | jq -r '.repo')
+  repo_short_expr=$(echo "$item_mapping_json" | jq -r '.repo_short')
+  number_expr=$(echo "$item_mapping_json" | jq -r '.number')
+  title_expr=$(echo "$item_mapping_json" | jq -r '.title')
+  body_expr=$(echo "$item_mapping_json" | jq -r '.body')
+  url_expr=$(echo "$item_mapping_json" | jq -r '.url')
+  branch_expr=$(echo "$item_mapping_json" | jq -r '.branch')
   
-  # Get prompt template
+  # Get effective prompt template (or default)
   local prompt_template
-  prompt_template=$(poll_config_get "$config_file" ".prompt.template")
+  prompt_template=$(poll_config_get_effective_prompt "$config_file")
   
-  # Get session name template
+  # Get effective session name template (or default)
   local session_template
-  session_template=$(poll_config_get "$config_file" ".session.name_template")
+  session_template=$(poll_config_get_effective_session_name "$config_file")
   
-  # Get agent (defaults to "plan" for safety in automated sessions)
+  # Get effective agent (or default based on source type)
   local session_agent
-  session_agent=$(poll_config_get_with_default "$config_file" ".session.agent" "plan")
+  session_agent=$(poll_config_get_effective_agent "$config_file")
   
   # Validate agent to prevent command injection from malicious configs
   case "$session_agent" in
@@ -566,9 +570,13 @@ process_poll() {
       ;;
   esac
   
-  # Get source type (defaults to "poll" if not specified)
+  # Get source type (required in new schema)
   local source_type
-  source_type=$(poll_config_get_with_default "$config_file" ".source_type" "poll")
+  source_type=$(poll_config_get "$config_file" ".source_type")
+  
+  # Get repo filters for matching
+  local repo_filters_json
+  repo_filters_json=$(poll_config_get_repo_filters "$config_file")
   
   # Process each item
   echo "$items_json" | jq -c '.[]' | while read -r item; do
@@ -594,11 +602,12 @@ process_poll() {
     log "    Branch: $branch"
     log "    Title: $title"
     
-    # Get repo path
+    # Match item against repo filters to get repo_path
     local repo_path
-    repo_path=$(poll_config_get "$config_file" ".repo_paths.\"$repo\"")
+    repo_path=$(poll_config_match_repo_filter "$item" "$repo_filters_json")
     if [[ -z "$repo_path" ]]; then
-      log_warn "    No repo_path configured for $repo, skipping"
+      log_warn "    No matching repo_filter for item, skipping"
+      [[ "$VERBOSE" == "true" ]] && log "    Item JSON: $item"
       continue
     fi
     repo_path=$(expand_path "$repo_path")
