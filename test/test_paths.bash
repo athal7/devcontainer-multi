@@ -629,6 +629,148 @@ test_get_git_status_unpushed() {
 }
 
 # =============================================================================
+# Identifier Resolution Tests
+# =============================================================================
+
+test_resolve_identifier_function_exists() {
+  source "$LIB_DIR/ocdc-paths.bash"
+  
+  if ! type -t ocdc_resolve_identifier >/dev/null 2>&1; then
+    echo "ocdc_resolve_identifier function not defined"
+    return 1
+  fi
+  return 0
+}
+
+test_resolve_identifier_finds_single_match() {
+  source "$LIB_DIR/ocdc-paths.bash"
+  ocdc_ensure_dirs
+  
+  # Set up ports.json with a single workspace
+  cat > "$OCDC_PORTS_FILE" << 'EOF'
+{
+  "/path/to/workspace": {
+    "port": 13000,
+    "repo": "myrepo",
+    "branch": "feature-x",
+    "started": "2024-01-01T10:00:00Z"
+  }
+}
+EOF
+  
+  local result
+  result=$(ocdc_resolve_identifier "feature-x" "" 2>/dev/null)
+  
+  assert_equals "/path/to/workspace" "$result"
+}
+
+test_resolve_identifier_finds_match_with_repo() {
+  source "$LIB_DIR/ocdc-paths.bash"
+  ocdc_ensure_dirs
+  
+  # Set up ports.json with multiple workspaces, same branch different repos
+  cat > "$OCDC_PORTS_FILE" << 'EOF'
+{
+  "/path/to/repo1/main": {
+    "port": 13000,
+    "repo": "repo1",
+    "branch": "main",
+    "started": "2024-01-01T10:00:00Z"
+  },
+  "/path/to/repo2/main": {
+    "port": 13001,
+    "repo": "repo2",
+    "branch": "main",
+    "started": "2024-01-01T11:00:00Z"
+  }
+}
+EOF
+  
+  local result
+  result=$(ocdc_resolve_identifier "main" "repo1" 2>/dev/null)
+  
+  assert_equals "/path/to/repo1/main" "$result"
+}
+
+test_resolve_identifier_errors_on_no_match() {
+  source "$LIB_DIR/ocdc-paths.bash"
+  ocdc_ensure_dirs
+  
+  echo '{}' > "$OCDC_PORTS_FILE"
+  
+  local output
+  if output=$(ocdc_resolve_identifier "nonexistent" "" 2>&1); then
+    echo "Should have failed for nonexistent branch"
+    return 1
+  fi
+  
+  assert_contains "$output" "No workspace found"
+}
+
+test_resolve_identifier_prefers_most_recent_when_multiple() {
+  source "$LIB_DIR/ocdc-paths.bash"
+  ocdc_ensure_dirs
+  
+  # Two workspaces with same branch, different repos, neither active
+  # The one with more recent started time should win
+  cat > "$OCDC_PORTS_FILE" << 'EOF'
+{
+  "/path/to/old": {
+    "port": 19998,
+    "repo": "repo-old",
+    "branch": "feature",
+    "started": "2024-01-01T10:00:00Z"
+  },
+  "/path/to/new": {
+    "port": 19999,
+    "repo": "repo-new",
+    "branch": "feature",
+    "started": "2024-01-02T10:00:00Z"
+  }
+}
+EOF
+  
+  local result stderr_output
+  stderr_output=$(ocdc_resolve_identifier "feature" "" 2>&1 >/dev/null) || true
+  result=$(ocdc_resolve_identifier "feature" "" 2>/dev/null)
+  
+  # Should pick the more recent one
+  assert_equals "/path/to/new" "$result"
+  
+  # Should warn about ambiguity
+  assert_contains "$stderr_output" "Multiple workspaces match"
+}
+
+test_resolve_identifier_warns_on_ambiguous() {
+  source "$LIB_DIR/ocdc-paths.bash"
+  ocdc_ensure_dirs
+  
+  # Two workspaces with same branch
+  cat > "$OCDC_PORTS_FILE" << 'EOF'
+{
+  "/path/to/ws1": {
+    "port": 19998,
+    "repo": "repo1",
+    "branch": "develop",
+    "started": "2024-01-01T10:00:00Z"
+  },
+  "/path/to/ws2": {
+    "port": 19999,
+    "repo": "repo2",
+    "branch": "develop",
+    "started": "2024-01-02T10:00:00Z"
+  }
+}
+EOF
+  
+  local stderr_output
+  stderr_output=$(ocdc_resolve_identifier "develop" "" 2>&1 >/dev/null) || true
+  
+  # Should warn with repo/branch format hint
+  assert_contains "$stderr_output" "repo2/develop"
+}
+
+# =============================================================================
 # Run Tests
 # =============================================================================
 
@@ -659,6 +801,22 @@ for test_func in \
   test_resolve_path_handles_relative_paths \
   test_resolve_path_resolves_nested_symlinks \
   test_resolve_path_does_not_change_cwd
+do
+  setup
+  run_test "${test_func#test_}" "$test_func"
+  teardown
+done
+
+echo ""
+echo "Identifier Resolution Tests:"
+
+for test_func in \
+  test_resolve_identifier_function_exists \
+  test_resolve_identifier_finds_single_match \
+  test_resolve_identifier_finds_match_with_repo \
+  test_resolve_identifier_errors_on_no_match \
+  test_resolve_identifier_prefers_most_recent_when_multiple \
+  test_resolve_identifier_warns_on_ambiguous
 do
   setup
   run_test "${test_func#test_}" "$test_func"

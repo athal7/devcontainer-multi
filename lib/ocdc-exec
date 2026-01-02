@@ -3,18 +3,25 @@
 # ocdc-exec - Execute a command in a running devcontainer
 #
 # Usage:
-#   ocdc exec <command> [args...]   # Run command in current workspace's container
-#   ocdc exec --workspace <path> <command> [args...]
+#   ocdc exec <branch> -- <command> [args...]   # Run in workspace by branch
+#   ocdc exec --repo <repo> <branch> -- <command> [args...]  # Specify repo
+#   ocdc exec -- <command> [args...]            # Run in current workspace
+#   ocdc exec --workspace <path> -- <command> [args...]  # Explicit path
 #
 # Examples:
-#   ocdc exec bash                  # Open shell in container
-#   ocdc exec bin/rails console    # Run rails console
-#   ocdc exec npm test             # Run tests
+#   ocdc exec feature-x -- bin/dev        # Run in feature-x branch workspace
+#   ocdc exec --repo myapp main -- bash   # Run in myapp/main workspace
+#   ocdc exec -- npm test                 # Run in current directory's workspace
+#
+# Options:
+#   --repo, -r <repo>      Specify repository (for disambiguation)
+#   --workspace, -w <path> Specify workspace path directly (takes precedence)
 #
 # Related commands:
 #   ocdc up     - Start devcontainer
 #   ocdc down   - Stop devcontainer
 #   ocdc list   - List active instances
+#   ocdc go     - Navigate to clone
 
 set -euo pipefail
 
@@ -29,8 +36,15 @@ OVERRIDES_DIR="$OCDC_OVERRIDES_DIR"
 error() { echo "[ocdc-exec] ERROR: $*" >&2; exit 1; }
 
 # Parse arguments
+# Two modes:
+# 1. With "--": ocdc exec <branch> -- <cmd>  (identifier before --, command after)
+# 2. Without "--": ocdc exec <cmd>           (all args are command, use current dir)
 WORKSPACE=""
+REPO=""
+IDENTIFIER=""
 CMD_ARGS=()
+PRE_SEPARATOR_ARGS=()
+SEEN_SEPARATOR=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,35 +52,63 @@ while [[ $# -gt 0 ]]; do
       WORKSPACE="$2"
       shift 2
       ;;
+    --repo|-r)
+      REPO="$2"
+      shift 2
+      ;;
     --help|-h)
       sed -n '2,/^$/p' "$0" | sed 's/^# //' | sed 's/^#//'
       exit 0
       ;;
     --)
+      SEEN_SEPARATOR=true
       shift
       CMD_ARGS+=("$@")
       break
       ;;
+    -*)
+      error "Unknown option: $1"
+      ;;
     *)
-      CMD_ARGS+=("$1")
+      # Collect non-option args before --
+      PRE_SEPARATOR_ARGS+=("$1")
       shift
       ;;
   esac
 done
 
-[[ ${#CMD_ARGS[@]} -gt 0 ]] || error "No command specified. Usage: ocdc exec <command> [args...]"
+# Interpret pre-separator args based on whether -- was seen
+if [[ "$SEEN_SEPARATOR" == "true" ]]; then
+  # With "--": pre-separator arg is the identifier
+  if [[ ${#PRE_SEPARATOR_ARGS[@]} -gt 1 ]]; then
+    error "Too many arguments before '--'. Usage: ocdc exec <branch> -- <command>"
+  elif [[ ${#PRE_SEPARATOR_ARGS[@]} -eq 1 ]]; then
+    IDENTIFIER="${PRE_SEPARATOR_ARGS[0]}"
+  fi
+  # CMD_ARGS already set from after --
+else
+  # Without "--": all pre-separator args are the command (backward compatible)
+  CMD_ARGS=("${PRE_SEPARATOR_ARGS[@]}")
+fi
+
+[[ ${#CMD_ARGS[@]} -gt 0 ]] || error "No command specified. Usage: ocdc exec <branch> -- <command>"
 
 # Determine workspace
-if [[ -z "$WORKSPACE" ]]; then
+if [[ -n "$WORKSPACE" ]]; then
+  # Explicit workspace path takes precedence
+  WORKSPACE=$(ocdc_resolve_path "$WORKSPACE")
+elif [[ -n "$IDENTIFIER" ]]; then
+  # Resolve identifier to workspace
+  WORKSPACE=$(ocdc_resolve_identifier "$IDENTIFIER" "$REPO") || exit 1
+else
+  # Fall back to current directory / git root
   if git rev-parse --git-dir >/dev/null 2>&1; then
     WORKSPACE=$(git rev-parse --show-toplevel)
   else
     WORKSPACE=$(pwd)
   fi
+  WORKSPACE=$(ocdc_resolve_path "$WORKSPACE")
 fi
-
-# Resolve to absolute path with symlinks resolved
-WORKSPACE=$(ocdc_resolve_path "$WORKSPACE")
 
 # Check if workspace is tracked
 if ! jq -e --arg ws "$WORKSPACE" '.[$ws]' "$PORTS_FILE" >/dev/null 2>&1; then

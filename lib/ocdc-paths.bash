@@ -212,6 +212,99 @@ ocdc_is_safe_to_remove() {
   return 0  # Safe to remove
 }
 
+# Check if a port is actively listening
+# Usage: ocdc_is_port_active 13000
+# Returns: 0 if active, 1 if not
+ocdc_is_port_active() {
+  local port="$1"
+  lsof -i ":$port" >/dev/null 2>&1
+}
+
+# Resolve a branch identifier to a workspace path
+# Usage: ocdc_resolve_identifier <branch> [repo]
+# Outputs: workspace path to stdout
+# Outputs: warning to stderr if ambiguous
+# Returns: 0 on success, 1 on failure (with error message to stderr)
+#
+# Resolution order when multiple matches:
+# 1. Prefer workspaces with active containers (port responding)
+# 2. Fall back to most recently started
+# 3. Warn user about ambiguity
+ocdc_resolve_identifier() {
+  local branch="$1"
+  local repo="${2:-}"
+  
+  [[ -f "$OCDC_PORTS_FILE" ]] || { echo "No workspaces tracked" >&2; return 1; }
+  
+  local candidates
+  if [[ -n "$repo" ]]; then
+    # Exact repo + branch match
+    candidates=$(jq -r --arg r "$repo" --arg b "$branch" \
+      'to_entries[] | select(.value.repo == $r and .value.branch == $b) | .key' \
+      "$OCDC_PORTS_FILE" 2>/dev/null)
+  else
+    # Branch-only match
+    candidates=$(jq -r --arg b "$branch" \
+      'to_entries[] | select(.value.branch == $b) | .key' \
+      "$OCDC_PORTS_FILE" 2>/dev/null)
+  fi
+  
+  # Count matches
+  local count=0
+  local candidate_array=()
+  while IFS= read -r ws; do
+    [[ -n "$ws" ]] || continue
+    candidate_array+=("$ws")
+    count=$((count + 1))
+  done <<< "$candidates"
+  
+  if [[ $count -eq 0 ]]; then
+    if [[ -n "$repo" ]]; then
+      echo "No workspace found for: $repo/$branch" >&2
+    else
+      echo "No workspace found for: $branch" >&2
+    fi
+    return 1
+  fi
+  
+  if [[ $count -eq 1 ]]; then
+    echo "${candidate_array[0]}"
+    return 0
+  fi
+  
+  # Multiple matches - need to resolve ambiguity
+  # First, try to find an active one
+  local active_ws=""
+  local active_repo=""
+  for ws in "${candidate_array[@]}"; do
+    local port
+    port=$(jq -r --arg ws "$ws" '.[$ws].port' "$OCDC_PORTS_FILE")
+    if ocdc_is_port_active "$port"; then
+      active_ws="$ws"
+      active_repo=$(jq -r --arg ws "$ws" '.[$ws].repo' "$OCDC_PORTS_FILE")
+      break
+    fi
+  done
+  
+  if [[ -n "$active_ws" ]]; then
+    echo "[ocdc] Multiple workspaces match '$branch', using $active_repo/$branch (active)" >&2
+    echo "$active_ws"
+    return 0
+  fi
+  
+  # No active containers - pick most recently started
+  local best_ws=""
+  local best_repo=""
+  best_ws=$(jq -r --arg b "$branch" \
+    '[to_entries[] | select(.value.branch == $b)] | sort_by(.value.started) | reverse | .[0].key' \
+    "$OCDC_PORTS_FILE" 2>/dev/null)
+  best_repo=$(jq -r --arg ws "$best_ws" '.[$ws].repo' "$OCDC_PORTS_FILE")
+  
+  echo "[ocdc] Multiple workspaces match '$branch', using $best_repo/$branch (most recent)" >&2
+  echo "$best_ws"
+  return 0
+}
+
 # Export all paths
 export OCDC_CONFIG_DIR
 export OCDC_CACHE_DIR
