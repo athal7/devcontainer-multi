@@ -23,6 +23,7 @@ jobs:
           formula-name: ocdc
           homebrew-tap: athal7/homebrew-tap
           tag-name: ${{ github.event.release.tag_name }}
+          base-branch: main
           create-pullrequest: false
           commit-message: |
             chore: bump {{formulaName}} to {{version}}
