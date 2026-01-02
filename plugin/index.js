@@ -239,7 +239,7 @@ export const OCDC = async ({ client }) => {
             // Workspace doesn't exist - try to create it automatically
             try {
               // Use execFileSync to avoid shell injection from target
-              const result = execFileSync('ocdc', ['up', target], {
+              execFileSync('ocdc', ['up', target], {
                 encoding: "utf-8",
                 maxBuffer: 10 * 1024 * 1024,
                 timeout: 300000, // 5 minutes for container setup
@@ -256,10 +256,9 @@ export const OCDC = async ({ client }) => {
                 return `Workspace created and session now targeting: ${newResolved.repoName}/${newResolved.branch}\n` +
                        `Workspace: ${newResolved.workspace}\n\n` +
                        `All commands will run inside this container.\n` +
-                       `Use \`/ocdc off\` to disable, or prefix with \`HOST:\` to run on host.\n\n` +
-                       `--- ocdc up output ---\n${result}`
+                       `Use \`/ocdc off\` to disable, or prefix with \`HOST:\` to run on host.`
               }
-              return `Workspace created but could not auto-target. Output:\n${result}`
+              return `Workspace created but could not auto-target.`
             } catch (err) {
               // Auto-creation failed - ask for confirmation
               if (!shouldCreate) {
@@ -290,7 +289,7 @@ export const OCDC = async ({ client }) => {
             // Container exists but not running - try to start it automatically
             try {
               // Use execFileSync to avoid shell injection from target
-              const result = execFileSync('ocdc', ['up', target], {
+              execFileSync('ocdc', ['up', target], {
                 encoding: "utf-8",
                 maxBuffer: 10 * 1024 * 1024,
                 timeout: 300000,
@@ -300,8 +299,7 @@ export const OCDC = async ({ client }) => {
               return `Container started and session now targeting: ${repoName}/${branch}\n` +
                      `Workspace: ${workspace}\n\n` +
                      `All commands will run inside this container.\n` +
-                     `Use \`/ocdc off\` to disable, or prefix with \`HOST:\` to run on host.\n\n` +
-                     `--- ocdc up output ---\n${result}`
+                     `Use \`/ocdc off\` to disable, or prefix with \`HOST:\` to run on host.`
             } catch (err) {
               // Auto-start failed - ask for confirmation
               if (!shouldCreate) {
