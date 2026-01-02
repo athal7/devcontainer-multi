@@ -650,6 +650,16 @@ test_plugin_set_context_validates_workspace() {
   return 0
 }
 
+test_plugin_ocdc_tool_does_not_show_verbose_up_output() {
+  # The ocdc tool should NOT include verbose "ocdc up output" sections
+  # These logs are noisy and not useful for the user
+  if grep -q -- '--- ocdc up output ---' "$PLUGIN_DIR/index.js"; then
+    echo "ocdc tool should not include verbose 'ocdc up output' sections"
+    return 1
+  fi
+  return 0
+}
+
 # =============================================================================
 # Timeout Utility Tests
 # =============================================================================
@@ -1683,7 +1693,8 @@ for test_func in \
   test_plugin_hook_wraps_with_ocdc_exec \
   test_plugin_ocdc_tool_checks_cli_installed \
   test_plugin_ocdc_tool_handles_off \
-  test_plugin_set_context_validates_workspace
+  test_plugin_set_context_validates_workspace \
+  test_plugin_ocdc_tool_does_not_show_verbose_up_output
 do
   setup
   run_test "${test_func#test_}" "$test_func"
