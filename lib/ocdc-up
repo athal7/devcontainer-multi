@@ -48,6 +48,7 @@ set -euo pipefail
 # Source paths library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/ocdc-paths.bash"
+source "${SCRIPT_DIR}/../lib/ocdc-file-lock.bash"
 
 # Run migration on first use
 ocdc_migrate_paths
@@ -57,6 +58,7 @@ CONFIG_DIR="$OCDC_CONFIG_DIR"
 CONFIG_FILE="$OCDC_CONFIG_FILE"
 CACHE_DIR="$OCDC_CACHE_DIR"
 PORTS_FILE="$OCDC_PORTS_FILE"
+PORTS_LOCK="${CACHE_DIR}/ports.lock"
 OVERRIDES_DIR="$OCDC_OVERRIDES_DIR"
 CLONES_DIR="$OCDC_CLONES_DIR"
 
@@ -276,15 +278,20 @@ get_port() {
   fi
 }
 
-PORT=$(get_port)
-
-# Save port assignment
+# Save port assignment (must be called while holding PORTS_LOCK)
 save_port() {
   local tmp=$(mktemp)
   jq --arg ws "$WORKSPACE" --argjson port "$PORT" --arg repo "$REPO_NAME" --arg branch "${BRANCH:-$(git -C "$WORKSPACE" branch --show-current 2>/dev/null || echo 'main')}" \
     '.[$ws] = {"port": $port, "repo": $repo, "branch": $branch, "started": now | todate}' \
     "$PORTS_FILE" > "$tmp" && mv "$tmp" "$PORTS_FILE"
 }
+
+# Atomic port reservation: find available port and save assignment
+# This prevents race conditions when multiple ocdc up commands run simultaneously
+lock_file "$PORTS_LOCK"
+PORT=$(get_port)
+save_port
+unlock_file "$PORTS_LOCK"
 
 # Read the original devcontainer.json to find the internal port
 DEVCONTAINER_JSON="$WORKSPACE/.devcontainer/devcontainer.json"
@@ -353,9 +360,6 @@ if [[ "$REMOVE_EXISTING" == "true" ]]; then
   log "Removing existing container..."
 fi
 
-# Save port assignment before starting
-save_port
-
 log "Starting devcontainer..."
 echo ""
 
@@ -388,8 +392,12 @@ if devcontainer up "${UP_ARGS[@]}"; then
   log "  ocdc list           - List all instances"
   [[ -n "$BRANCH" ]] && log "  ocdc go $BRANCH     - Navigate to this clone"
 else
-  # Clean up port assignment on failure
+  # Clean up port assignment on failure (with lock to prevent race conditions)
+  lock_file "$PORTS_LOCK"
   tmp=$(mktemp)
-  jq --arg ws "$WORKSPACE" 'del(.[$ws])' "$PORTS_FILE" > "$tmp" && mv "$tmp" "$PORTS_FILE"
+  # Use || true to ensure unlock happens even if jq/mv fails
+  { jq --arg ws "$WORKSPACE" 'del(.[$ws])' "$PORTS_FILE" > "$tmp" && mv "$tmp" "$PORTS_FILE"; } || true
+  rm -f "$tmp" 2>/dev/null || true
+  unlock_file "$PORTS_LOCK"
   error "Failed to start devcontainer"
 fi

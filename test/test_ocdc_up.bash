@@ -351,6 +351,71 @@ EOF
   return 0
 }
 
+test_ocdc_up_concurrent_port_assignment_gets_different_ports() {
+  # Test that two concurrent ocdc up commands get different ports
+  # This validates the fix for the race condition in issue #27
+  
+  cd "$TEST_REPO"
+  
+  # Create two branches
+  git checkout -q -b branch-a
+  git checkout -q -b branch-b
+  git checkout -q main 2>/dev/null || git checkout -q master
+  
+  # Start both ocdc up commands in parallel, capturing output to check assigned ports
+  local output_a="$TEST_DIR/output_a.txt"
+  local output_b="$TEST_DIR/output_b.txt"
+  
+  "$BIN_DIR/ocdc" up branch-a --no-open > "$output_a" 2>&1 &
+  local pid_a=$!
+  
+  "$BIN_DIR/ocdc" up branch-b --no-open > "$output_b" 2>&1 &
+  local pid_b=$!
+  
+  # Wait for both to complete (or timeout after 60 seconds)
+  local waited=0
+  while [[ $waited -lt 600 ]]; do
+    if ! kill -0 "$pid_a" 2>/dev/null && ! kill -0 "$pid_b" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+    ((waited++)) || true
+  done
+  
+  # Kill any remaining processes
+  kill "$pid_a" 2>/dev/null || true
+  kill "$pid_b" 2>/dev/null || true
+  wait "$pid_a" 2>/dev/null || true
+  wait "$pid_b" 2>/dev/null || true
+  
+  # Extract assigned ports from output (format: "Port mapping: localhost:13XXX -> container:3000")
+  local port_a port_b
+  port_a=$(grep -o 'localhost:[0-9]*' "$output_a" 2>/dev/null | head -1 | cut -d: -f2)
+  port_b=$(grep -o 'localhost:[0-9]*' "$output_b" 2>/dev/null | head -1 | cut -d: -f2)
+  
+  if [[ -z "$port_a" ]] || [[ -z "$port_b" ]]; then
+    echo "Could not extract ports from output"
+    echo "Output A:"
+    cat "$output_a"
+    echo ""
+    echo "Output B:"
+    cat "$output_b"
+    return 1
+  fi
+  
+  if [[ "$port_a" == "$port_b" ]]; then
+    echo "Both workspaces got the same port ($port_a) - race condition not fixed!"
+    echo "Output A:"
+    cat "$output_a"
+    echo ""
+    echo "Output B:"
+    cat "$output_b"
+    return 1
+  fi
+  
+  return 0
+}
+
 # =============================================================================
 # Run Tests
 # =============================================================================
@@ -368,7 +433,8 @@ for test_func in \
   test_ocdc_up_no_open_flag_works \
   test_ocdc_up_override_sets_correct_workspace_folder \
   test_ocdc_up_copies_gitignored_files_to_clone \
-  test_ocdc_up_skips_path_traversal_attempts
+  test_ocdc_up_skips_path_traversal_attempts \
+  test_ocdc_up_concurrent_port_assignment_gets_different_ports
 do
   setup
   run_test "${test_func#test_}" "$test_func"

@@ -78,6 +78,52 @@ test_lock_file_blocks_second_lock() {
   return 0
 }
 
+test_lock_file_recovers_from_stale_lock() {
+  source "$LIB_DIR/ocdc-file-lock.bash"
+  
+  local lockfile="$TEST_DIR/stale.lock"
+  
+  # Create a stale lock directory manually
+  mkdir -p "$lockfile"
+  
+  # Set mtime to 120 seconds ago (older than 60-second default max_age)
+  # macOS uses -t with YYYYMMDDhhmm format, Linux uses -d
+  local old_time
+  old_time=$(date -v-120S +%Y%m%d%H%M 2>/dev/null || date -d '120 seconds ago' +%Y%m%d%H%M 2>/dev/null)
+  touch -t "$old_time" "$lockfile" 2>/dev/null || touch -d '120 seconds ago' "$lockfile" 2>/dev/null
+  
+  # Try to acquire the lock - should succeed quickly because lock is stale
+  # Use a short max_age (1 second) to speed up the test
+  local result_file="$TEST_DIR/lock_result"
+  (
+    source "$LIB_DIR/ocdc-file-lock.bash"
+    lock_file "$lockfile" 1  # 1-second max_age for faster test
+    echo "acquired" > "$result_file"
+  ) &
+  local bg_pid=$!
+  
+  # Wait up to 2 seconds for lock acquisition
+  local waited=0
+  while [[ $waited -lt 20 ]] && ! [[ -f "$result_file" ]]; do
+    sleep 0.1
+    ((waited++)) || true
+  done
+  
+  # Kill background process if still running
+  kill "$bg_pid" 2>/dev/null || true
+  wait "$bg_pid" 2>/dev/null || true
+  
+  if [[ ! -f "$result_file" ]] || [[ "$(cat "$result_file" 2>/dev/null)" != "acquired" ]]; then
+    echo "lock_file should recover from stale lock (older than max_age)"
+    rmdir "$lockfile" 2>/dev/null || true
+    return 1
+  fi
+  
+  # Cleanup
+  rmdir "$lockfile" 2>/dev/null || true
+  return 0
+}
+
 # =============================================================================
 # Tests for unlock_file
 # =============================================================================
@@ -231,6 +277,7 @@ echo "File Locking Tests:"
 for test_func in \
   test_lock_file_creates_lock_directory \
   test_lock_file_blocks_second_lock \
+  test_lock_file_recovers_from_stale_lock \
   test_unlock_file_removes_lock_directory \
   test_unlock_file_succeeds_when_not_locked \
   test_mark_processed_creates_state_entry \

@@ -20,9 +20,11 @@ set -euo pipefail
 # Source paths library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/ocdc-paths.bash"
+source "${SCRIPT_DIR}/../lib/ocdc-file-lock.bash"
 
 CACHE_DIR="$OCDC_CACHE_DIR"
 PORTS_FILE="$OCDC_PORTS_FILE"
+PORTS_LOCK="${CACHE_DIR}/ports.lock"
 OVERRIDES_DIR="$OCDC_OVERRIDES_DIR"
 CLONES_DIR="$OCDC_CLONES_DIR"
 
@@ -99,9 +101,11 @@ stop_container() {
   # Clean up override file
   [[ -f "$override_file" ]] && rm -f "$override_file"
   
-  # Remove port assignment
+  # Remove port assignment (with lock to prevent race conditions)
+  lock_file "$PORTS_LOCK"
   local tmp=$(mktemp)
   jq --arg ws "$ws" 'del(.[$ws])' "$PORTS_FILE" > "$tmp" && mv "$tmp" "$PORTS_FILE"
+  unlock_file "$PORTS_LOCK"
   
   log "Stopped and released port $port"
   
@@ -126,8 +130,12 @@ prune_stale() {
     # Check if anything is listening on that port
     if ! lsof -i ":$port" >/dev/null 2>&1; then
       log "Removing stale assignment: $ws (port $port)"
+      
+      # Remove port assignment (with lock to prevent race conditions)
+      lock_file "$PORTS_LOCK"
       local tmp=$(mktemp)
       jq --arg ws "$ws" 'del(.[$ws])' "$PORTS_FILE" > "$tmp" && mv "$tmp" "$PORTS_FILE"
+      unlock_file "$PORTS_LOCK"
       
       # Clean up override file
       local ws_id=$(ocdc_path_id "$ws")

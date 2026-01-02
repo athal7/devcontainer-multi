@@ -7,10 +7,29 @@
 #
 
 # Acquire a lock using mkdir (atomic operation)
-# Spins until lock is acquired
+# Spins until lock is acquired, with stale lock detection
+# Args:
+#   $1 - lock directory path
+#   $2 - max age in seconds before lock is considered stale (default: 60)
 lock_file() {
   local lockdir="$1"
+  local max_age="${2:-60}"
+  
   while ! mkdir "$lockdir" 2>/dev/null; do
+    # Check if existing lock is stale (older than max_age)
+    if [[ -d "$lockdir" ]]; then
+      local lock_mtime now lock_age
+      # Cross-platform mtime: Linux uses -c %Y, macOS uses -f %m
+      lock_mtime=$(stat -c %Y "$lockdir" 2>/dev/null) || lock_mtime=$(stat -f %m "$lockdir" 2>/dev/null) || lock_mtime=0
+      now=$(date +%s)
+      lock_age=$((now - lock_mtime))
+      
+      if [[ $lock_age -gt $max_age ]]; then
+        # Lock is stale - try to remove it and retry
+        rmdir "$lockdir" 2>/dev/null || true
+        continue
+      fi
+    fi
     sleep 0.1
   done
 }
