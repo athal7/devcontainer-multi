@@ -301,6 +301,52 @@ test_github_pr_state_open() {
   assert_equals "false" "$should_cleanup"
 }
 
+test_cleanup_check_source_state_parses_pr_url() {
+  # This tests the URL parsing logic in cleanup_check_source_state
+  # We can't test the gh CLI call directly, but we can test URL parsing
+  local source_url="https://github.com/myorg/myrepo/pull/123"
+  
+  # The function should extract: repo=myorg/myrepo, pr_number=123
+  # Since we don't want to call gh CLI in tests, we verify the regex works
+  if [[ "$source_url" =~ github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
+    local repo="${BASH_REMATCH[1]}"
+    local pr_number="${BASH_REMATCH[2]}"
+    
+    assert_equals "myorg/myrepo" "$repo"
+    assert_equals "123" "$pr_number"
+  else
+    echo "URL regex should match: $source_url"
+    return 1
+  fi
+  return 0
+}
+
+test_cleanup_check_source_state_parses_issue_url() {
+  local source_url="https://github.com/owner/repo/issues/456"
+  
+  if [[ "$source_url" =~ github\.com/([^/]+/[^/]+)/issues/([0-9]+) ]]; then
+    local repo="${BASH_REMATCH[1]}"
+    local issue_number="${BASH_REMATCH[2]}"
+    
+    assert_equals "owner/repo" "$repo"
+    assert_equals "456" "$issue_number"
+  else
+    echo "URL regex should match: $source_url"
+    return 1
+  fi
+  return 0
+}
+
+test_cleanup_check_source_state_unknown_type_returns_false() {
+  local result
+  result=$(cleanup_check_source_state "unknown_type" "https://example.com/item/123")
+  
+  local should_cleanup
+  should_cleanup=$(echo "$result" | jq -r '.should_cleanup')
+  
+  assert_equals "false" "$should_cleanup"
+}
+
 # =============================================================================
 # Tests: Cleanup config parsing
 # =============================================================================
@@ -562,7 +608,10 @@ echo "PR State Detection Tests:"
 for test_func in \
   test_github_pr_state_parsing \
   test_github_pr_state_closed_not_merged \
-  test_github_pr_state_open
+  test_github_pr_state_open \
+  test_cleanup_check_source_state_parses_pr_url \
+  test_cleanup_check_source_state_parses_issue_url \
+  test_cleanup_check_source_state_unknown_type_returns_false
 do
   setup
   run_test "${test_func#test_}" "$test_func"

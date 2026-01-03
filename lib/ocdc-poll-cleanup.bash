@@ -129,8 +129,9 @@ cleanup_queue_add() {
   cleanup_epoch=$((now_epoch + delay_seconds))
   
   # Format as ISO timestamp (works on both macOS and Linux)
-  if date -u -r "$cleanup_epoch" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null; then
-    cleanup_after=$(date -u -r "$cleanup_epoch" +"%Y-%m-%dT%H:%M:%SZ")
+  # macOS uses -r, Linux uses -d "@epoch"
+  if cleanup_after=$(date -u -r "$cleanup_epoch" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null); then
+    : # macOS succeeded
   else
     # Linux fallback
     cleanup_after=$(date -u -d "@$cleanup_epoch" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "$queued_at")
@@ -504,48 +505,4 @@ cleanup_execute_all() {
   done < <(echo "$actions_json" | jq -r '.[]')
 }
 
-# Process all ready items in the cleanup queue
-# Usage: cleanup_process_ready_items
-# Returns: number of items processed
-cleanup_process_ready_items() {
-  local processed=0
-  
-  # Get ready items
-  local item
-  while IFS= read -r item; do
-    [[ -z "$item" ]] && continue
-    
-    local key tmux_session clone_path poll_id
-    key=$(echo "$item" | jq -r '.key')
-    tmux_session=$(echo "$item" | jq -r '.tmux_session')
-    clone_path=$(echo "$item" | jq -r '.clone_path')
-    poll_id=$(echo "$item" | jq -r '.poll_id')
-    
-    echo "[cleanup] Processing cleanup for: $key" >&2
-    
-    # Get actions from the associated poll config (or use defaults)
-    local actions
-    actions='["kill_session", "stop_container"]'  # Default actions
-    
-    # Execute cleanup actions
-    cleanup_execute_all "$tmux_session" "$clone_path" "$actions"
-    
-    # Remove from queue
-    cleanup_queue_remove "$key"
-    
-    # Clear from processed.json state
-    if [[ -f "$OCDC_POLL_STATE_DIR/processed.json" ]]; then
-      local tmp
-      tmp=$(mktemp)
-      if jq --arg key "$key" 'del(.[$key])' "$OCDC_POLL_STATE_DIR/processed.json" > "$tmp" 2>/dev/null; then
-        mv "$tmp" "$OCDC_POLL_STATE_DIR/processed.json"
-      else
-        rm -f "$tmp"
-      fi
-    fi
-    
-    processed=$((processed + 1))
-  done < <(cleanup_queue_get_ready)
-  
-  echo "$processed"
-}
+
