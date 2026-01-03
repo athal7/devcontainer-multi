@@ -20,6 +20,7 @@ BIN_DIR="$(dirname "$SCRIPT_DIR")/bin"
 source "${SCRIPT_DIR}/ocdc-paths.bash"
 source "${SCRIPT_DIR}/ocdc-poll-config.bash"
 source "${SCRIPT_DIR}/ocdc-file-lock.bash"
+source "${SCRIPT_DIR}/ocdc-poll-errors.bash"
 
 # Ensure ocdc commands are available
 export PATH="$BIN_DIR:$PATH"
@@ -519,14 +520,65 @@ process_poll() {
   local fetch_cmd
   fetch_cmd=$(poll_config_get_effective_fetch_command "$config_file")
   
-  # Execute fetch command
+  # Execute fetch command with error handling
   log "  Fetching items..."
   [[ "$VERBOSE" == "true" ]] && log "  Command: $fetch_cmd"
-  local items_json
-  if ! items_json=$(bash -c "$fetch_cmd" 2>&1); then
-    log_error "  Fetch command failed: $items_json"
-    return 1
+  local items_json fetch_output fetch_exit_code
+  fetch_output=$(bash -c "$fetch_cmd" 2>&1) || fetch_exit_code=$?
+  fetch_exit_code=${fetch_exit_code:-0}
+  
+  # Handle fetch errors based on exit code from ocdc-mcp-fetch.js
+  # Exit codes: 0=success, 10=not configured, 11=connection failed, 12=tool not found, 13=tool failed
+  if [[ $fetch_exit_code -ne 0 ]]; then
+    local error_type="$ERR_NETWORK_TIMEOUT"  # Default
+    local error_msg="$fetch_output"
+    
+    case $fetch_exit_code in
+      10)
+        # MCP not configured - skip this source permanently
+        error_type="$ERR_AUTH_FAILED"
+        log_error "  MCP not configured for source type. Skipping."
+        return 1
+        ;;
+      11)
+        # Connection failed - could be rate limit or network issue
+        if echo "$error_msg" | grep -qi "rate.limit\|429\|too.many.requests"; then
+          error_type="$ERR_RATE_LIMITED"
+          log_warn "  Rate limited. Will retry next cycle."
+        else
+          error_type="$ERR_NETWORK_TIMEOUT"
+          log_warn "  Connection failed. Will retry next cycle."
+        fi
+        return 1
+        ;;
+      12)
+        # Tool not found - likely auth issue or misconfiguration
+        error_type="$ERR_AUTH_FAILED"
+        log_error "  MCP tool not found. Check configuration."
+        return 1
+        ;;
+      13)
+        # Tool execution failed
+        if echo "$error_msg" | grep -qi "rate.limit\|429\|too.many.requests"; then
+          error_type="$ERR_RATE_LIMITED"
+          log_warn "  Rate limited. Will retry next cycle."
+        elif echo "$error_msg" | grep -qi "unauthorized\|forbidden\|401\|403"; then
+          error_type="$ERR_AUTH_FAILED"
+          log_error "  Authentication failed. Check credentials."
+        else
+          error_type="$ERR_NETWORK_TIMEOUT"
+          log_warn "  Fetch failed. Will retry next cycle."
+        fi
+        return 1
+        ;;
+      *)
+        log_error "  Fetch command failed (exit $fetch_exit_code): $error_msg"
+        return 1
+        ;;
+    esac
   fi
+  
+  items_json="$fetch_output"
   
   # Check if we got valid JSON array
   local item_count
@@ -593,13 +645,44 @@ process_poll() {
     url=$(get_item_field "$item" "$url_expr")
     branch=$(get_item_field "$item" "$branch_expr")
     
-    # Check if already processed
+    # Check if item should be permanently skipped (non-retryable error)
+    if poll_error_should_skip "$key"; then
+      local error_info
+      error_info=$(poll_error_get_info "$key")
+      local error_type error_msg
+      error_type=$(echo "$error_info" | jq -r '.type // "unknown"')
+      error_msg=$(echo "$error_info" | jq -r '.message // ""')
+      [[ "$VERBOSE" == "true" ]] && log "  Skipping $key (permanent error: $error_type - $error_msg)"
+      continue
+    fi
+    
+    # Check if already processed successfully
     if is_processed "$key"; then
       [[ "$VERBOSE" == "true" ]] && log "  Skipping $key (already processed)"
       continue
     fi
     
-    log "  New item: $key"
+    # Check if item is in error state but ready for retry
+    local is_retry=false
+    if poll_error_should_retry "$key"; then
+      is_retry=true
+      local error_info
+      error_info=$(poll_error_get_info "$key")
+      local attempts
+      attempts=$(echo "$error_info" | jq -r '.attempts // 0')
+      log "  Retrying item: $key (attempt $((attempts + 1)))"
+    else
+      # Check if in error state but not ready to retry yet
+      if poll_error_is_errored "$key"; then
+        local error_info
+        error_info=$(poll_error_get_info "$key")
+        local next_retry
+        next_retry=$(echo "$error_info" | jq -r '.next_retry // ""')
+        [[ "$VERBOSE" == "true" ]] && log "  Skipping $key (retry scheduled for $next_retry)"
+        continue
+      fi
+      log "  New item: $key"
+    fi
     log "    Repo: $repo"
     log "    Branch: $branch"
     log "    Title: $title"
@@ -622,6 +705,7 @@ process_poll() {
     # Check repo path exists
     if [[ ! -d "$repo_path" ]]; then
       log_error "    Repo path does not exist: $repo_path"
+      poll_error_mark_item "$key" "$config_id" "$ERR_REPO_NOT_FOUND" "Repo path does not exist: $repo_path"
       continue
     fi
     
@@ -659,8 +743,19 @@ process_poll() {
     local clone_dir="${OCDC_CLONES_DIR}/${repo_short}/${branch}"
     
     if [[ ! -d "$clone_dir" ]]; then
-      if ! (cd "$repo_path" && ocdc up "$branch" --no-open 2>&1); then
-        log_error "    Failed to create devcontainer"
+      local clone_output clone_exit_code
+      clone_output=$(cd "$repo_path" && ocdc up "$branch" --no-open 2>&1) || clone_exit_code=$?
+      clone_exit_code=${clone_exit_code:-0}
+      
+      if [[ $clone_exit_code -ne 0 ]]; then
+        # Determine if it's a clone failure or devcontainer failure
+        local error_type="$ERR_CLONE_FAILED"
+        if echo "$clone_output" | grep -qi "devcontainer\|container\|docker"; then
+          error_type="$ERR_DEVCONTAINER_FAILED"
+        fi
+        
+        log_error "    Failed to create devcontainer: $clone_output"
+        poll_error_mark_item "$key" "$config_id" "$error_type" "$clone_output"
         continue
       fi
     fi
@@ -687,17 +782,27 @@ process_poll() {
     # Create tmux session running opencode with the prompt
     # Set OCDC_* environment variables so the plugin knows the context
     # The session runs in the clone directory
-    if ! tmux new-session -d -s "$session_name" -c "$clone_dir" \
+    local tmux_output tmux_exit_code
+    tmux_output=$(tmux new-session -d -s "$session_name" -c "$clone_dir" \
       -e "OCDC_WORKSPACE=$clone_dir" \
       -e "OCDC_BRANCH=$branch" \
       -e "OCDC_SOURCE_URL=$url" \
       -e "OCDC_SOURCE_TYPE=$source_type" \
       -e "OCDC_POLL_CONFIG=$config_id" \
       -e "OCDC_ITEM_KEY=$key" \
-      "$opencode_cmd --prompt \"\$(cat '$prompt_file')\"; rm -f '$prompt_file'; echo 'Session complete. Press enter to close...'; read"; then
-      log_error "    Failed to create tmux session"
+      "$opencode_cmd --prompt \"\$(cat '$prompt_file')\"; rm -f '$prompt_file'; echo 'Session complete. Press enter to close...'; read" 2>&1) || tmux_exit_code=$?
+    tmux_exit_code=${tmux_exit_code:-0}
+    
+    if [[ $tmux_exit_code -ne 0 ]]; then
+      log_error "    Failed to create tmux session: $tmux_output"
       rm -f "$prompt_file"  # Cleanup prompt file on failure
+      poll_error_mark_item "$key" "$config_id" "$ERR_DEVCONTAINER_FAILED" "tmux session creation failed: $tmux_output"
       continue
+    fi
+    
+    # Clear any previous error state on success
+    if [[ "$is_retry" == "true" ]]; then
+      poll_error_clear_item "$key"
     fi
     
     log_success "    Session $session_name created"
