@@ -45,3 +45,13 @@ repo_filters:
     repo_path: "~/code/backend"
   - repo: "owner/frontend"
     repo_path: "~/code/frontend"
+
+# Optional: Configure automatic cleanup when PRs are merged/closed
+# Defaults shown below - uncomment to customize
+# cleanup:
+#   on: [merged, closed]  # Terminal states that trigger cleanup
+#   delay: 5m             # Grace period before cleanup (default: 5m)
+#   actions:              # Actions to perform (in order)
+#     - kill_session      # Kill the tmux session
+#     - stop_container    # Stop the devcontainer
+#     # - remove_clone    # Uncomment to also remove clone directory

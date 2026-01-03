@@ -138,10 +138,27 @@ Poll configs live in `~/.config/ocdc/polls/`. Each config defines:
 - `fetch` - Optional fetch options (assignee, state, labels, etc.)
 - `prompt.template` - Template for OpenCode session prompt (optional)
 - `session.name_template` - Template for tmux session name (optional)
+- `cleanup` - Optional cleanup configuration for merged/closed items
 
 **Available template variables**: `{key}`, `{repo}`, `{repo_short}`, `{number}`, `{title}`, `{body}`, `{url}`, `{branch}`
 
 Example configs are installed to `$(brew --prefix)/share/ocdc/examples/` and documented in the [examples directory](share/ocdc/examples/).
+
+### Automatic Cleanup
+
+When PRs are merged or closed, ocdc automatically detects this and cleans up resources after a configurable grace period:
+
+```yaml
+cleanup:
+  on: [merged, closed]  # Terminal states that trigger cleanup
+  delay: 5m             # Grace period before cleanup (default: 5 minutes)
+  actions:              # Actions to perform (in order)
+    - kill_session      # Kill the tmux session
+    - stop_container    # Stop the devcontainer
+    - remove_clone      # Remove the clone directory (only if git is clean)
+```
+
+**Safety**: The `remove_clone` action will skip directories with uncommitted or unpushed changes.
 
 ### Manual Polling
 
@@ -149,6 +166,12 @@ Run a single poll cycle without setting up the service:
 
 ```bash
 ocdc poll --once
+```
+
+Use `--skip-cleanup` to disable cleanup detection (for debugging):
+
+```bash
+ocdc poll --once --skip-cleanup
 ```
 
 ## License
