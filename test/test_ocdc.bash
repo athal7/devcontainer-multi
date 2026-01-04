@@ -44,63 +44,6 @@ test_ocdc_exists() {
 test_ocdc_version() {
   local output=$("$BIN_DIR/ocdc" version 2>&1)
   assert_contains "$output" "ocdc"
-  # Should contain a version number pattern
-  if ! echo "$output" | grep -qE '[0-9]+\.[0-9]+'; then
-    echo "Version output should contain version number"
-    echo "Got: $output"
-    return 1
-  fi
-  return 0
-}
-
-test_ocdc_version_matches_package_json() {
-  local repo_root
-  repo_root="$(cd "$BIN_DIR/.." && pwd)"
-  local expected_version
-  expected_version=$(jq -r '.version' "$repo_root/package.json")
-  
-  local output=$("$BIN_DIR/ocdc" version 2>&1)
-  
-  if ! echo "$output" | grep -qF "v$expected_version"; then
-    echo "Version should match package.json"
-    echo "Expected: v$expected_version"
-    echo "Got: $output"
-    return 1
-  fi
-  return 0
-}
-
-test_ocdc_version_reads_from_package_json() {
-  # Verify that changing package.json changes the version output
-  # This ensures version is dynamically read, not hardcoded
-  local repo_root
-  repo_root="$(cd "$BIN_DIR/.." && pwd)"
-  local original_version
-  original_version=$(jq -r '.version' "$repo_root/package.json")
-  
-  # Temporarily modify package.json to a test version
-  local test_version="99.88.77"
-  local temp_package
-  temp_package=$(mktemp)
-  cp "$repo_root/package.json" "$temp_package"
-  
-  # Ensure cleanup happens even on test failure
-  cleanup_package_json() {
-    cp "$temp_package" "$repo_root/package.json"
-    rm -f "$temp_package"
-  }
-  trap cleanup_package_json RETURN
-  
-  jq --arg v "$test_version" '.version = $v' "$temp_package" > "$repo_root/package.json"
-  
-  local output=$("$BIN_DIR/ocdc" version 2>&1)
-  
-  if ! echo "$output" | grep -qF "v$test_version"; then
-    echo "Version should be dynamically read from package.json"
-    echo "Expected to contain: v$test_version"
-    echo "Got: $output"
-    return 1
-  fi
   return 0
 }
 
@@ -206,8 +149,6 @@ echo "Main Entry Point Tests:"
 for test_func in \
   test_ocdc_exists \
   test_ocdc_version \
-  test_ocdc_version_matches_package_json \
-  test_ocdc_version_reads_from_package_json \
   test_ocdc_help \
   test_ocdc_help_flag \
   test_ocdc_version_flag \

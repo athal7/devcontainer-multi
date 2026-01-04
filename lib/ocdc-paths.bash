@@ -43,27 +43,6 @@ ocdc_resolve_path() {
   (cd "$path" 2>/dev/null && pwd -P) || echo "$path"
 }
 
-# Get the version of ocdc from package.json
-# Returns "unknown" if package.json not found
-# Environment variable OCDC_VERSION takes precedence (for testing/override)
-ocdc_version() {
-  if [[ -n "${OCDC_VERSION:-}" ]]; then
-    echo "$OCDC_VERSION"
-    return
-  fi
-  
-  # Find package.json relative to this script's location
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local version_file="${script_dir}/../package.json"
-  
-  if [[ -f "$version_file" ]]; then
-    jq -r '.version' "$version_file"
-  else
-    echo "unknown"
-  fi
-}
-
 # Ensure all required directories exist
 ocdc_ensure_dirs() {
   mkdir -p "$OCDC_CONFIG_DIR"

@@ -37,15 +37,7 @@ PLUGIN_DEST="${OPENCODE_PLUGINS_DIR}/ocdc"
 
 # Show version
 show_version() {
-  cat << 'EOF'
-      ⚡
-  ___  ___ ___  ___ 
- / _ \/ __/ _ \/ __|
-| (_) | (_| (_) | (__ 
- \___/ \___\___/ \___|
-      ⚡
-EOF
-  echo "  ocdc v$(ocdc_version)"
+  echo "ocdc - OpenCode DevContainers"
 }
 
 # Show help

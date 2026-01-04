@@ -18,35 +18,16 @@ module.exports = {
       }
     ],
     
-    // Update VERSION in bin/ocdc (use perl for cross-platform in-place edit)
-    [
-      '@semantic-release/exec',
-      {
-        prepareCmd: "perl -i -pe 's/^VERSION=\".*\"/VERSION=\"${nextRelease.version}\"/' bin/ocdc"
-      }
-    ],
-    
     // Commit the version changes
     [
       '@semantic-release/git',
       {
-        assets: ['package.json', 'package-lock.json', 'bin/ocdc'],
+        assets: ['package.json', 'package-lock.json'],
         message: 'chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}'
       }
     ],
     
-    // Create GitHub release with assets
-    [
-      '@semantic-release/github',
-      {
-        assets: [
-          {
-            path: 'dist/devcontainer-multi.tar.gz',
-            label: 'OCDC Release Archive',
-            name: 'ocdc-${nextRelease.version}.tar.gz'
-          }
-        ]
-      }
-    ]
+    // Create GitHub release
+    '@semantic-release/github'
   ]
 };
