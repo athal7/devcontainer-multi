@@ -313,20 +313,101 @@ self_iteration_run() {
   echo "$candidates"
 }
 
-# Fetch open GitHub issues for a repo (excluding already ready)
-# Usage: issues=$(self_iteration_fetch_github_issues "owner/repo")
-self_iteration_fetch_github_issues() {
+# =============================================================================
+# Issue Fetching (MCP-based)
+# =============================================================================
+
+# Fetch open issues for a repo using MCP
+# Usage: issues=$(self_iteration_fetch_issues "owner/repo")
+# Falls back to gh CLI if MCP fails
+self_iteration_fetch_issues() {
   local repo="$1"
   
-  local ready_label
-  ready_label=$(self_iteration_get_ready_label)
+  local issues=""
+  local mcp_exit_code=0
   
-  # Fetch open issues without the ready label
-  # Using gh api for more control over the query
+  # Try MCP fetch first
+  local fetch_options
+  fetch_options=$(jq -n --arg repo "$repo" '{repo: $repo, state: "open"}')
+  
+  issues=$(node "${SCRIPT_DIR}/ocdc-mcp-fetch.js" "github_issue" "$fetch_options" 2>/dev/null) || mcp_exit_code=$?
+  
+  # MCP exit codes: 10=not configured, 11=connection failed, 12=tool not found, 13=tool failed
+  if [[ $mcp_exit_code -ne 0 ]]; then
+    # Fall back to gh CLI
+    issues=$(_self_iteration_fetch_cli "$repo" 2>/dev/null) || issues="[]"
+  fi
+  
+  # Normalize the response to consistent field names
+  self_iteration_normalize_issues "$issues"
+}
+
+# Fallback: Fetch issues using gh CLI (internal)
+_self_iteration_fetch_cli() {
+  local repo="$1"
+  
   gh api -X GET "/repos/${repo}/issues" \
     -f state=open \
     -f per_page=100 \
     --jq '[.[] | select(.pull_request == null)]' 2>/dev/null || echo "[]"
+}
+
+# Normalize issue JSON to consistent field names
+# Handles both GitHub API (snake_case) and gh CLI (camelCase) formats
+# Usage: normalized=$(self_iteration_normalize_issues "$issues_json")
+self_iteration_normalize_issues() {
+  local issues_json="$1"
+  
+  # Handle empty input
+  if [[ -z "$issues_json" ]] || [[ "$issues_json" == "null" ]]; then
+    echo "[]"
+    return 0
+  fi
+  
+  # Normalize field names and handle different structures
+  echo "$issues_json" | jq '
+    [.[] | {
+      number: .number,
+      title: .title,
+      body: .body,
+      state: .state,
+      html_url: (.html_url // .url // ""),
+      # Normalize created_at (GitHub API) vs createdAt (gh CLI)
+      created_at: (.created_at // .createdAt // null),
+      # Normalize labels array
+      labels: (.labels // []),
+      # Normalize assignees array
+      assignees: (.assignees // []),
+      # Normalize milestone
+      milestone: .milestone,
+      # Normalize comments - handle both integer and array formats
+      comments: (
+        if (.comments | type) == "array" then (.comments | length)
+        elif (.comments | type) == "number" then .comments
+        else 0
+        end
+      ),
+      # Normalize reactions - handle different structures
+      reactions: (
+        if .reactions then .reactions
+        elif .reactionGroups then
+          # gh CLI format: convert reactionGroups to reactions object
+          (.reactionGroups // [] | 
+            map(select(.content == "THUMBS_UP") | {"+1": (.users.totalCount // 0)}) |
+            add // {"+1": 0}
+          )
+        else {"+1": 0}
+        end
+      ),
+      # Preserve repository info
+      repository: .repository
+    }]
+  ' 2>/dev/null || echo "[]"
+}
+
+# Legacy alias for backward compatibility
+self_iteration_fetch_github_issues() {
+  self_iteration_fetch_issues "$@"
 }
 
 # Run self-iteration for all configured repos

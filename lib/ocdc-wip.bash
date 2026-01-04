@@ -62,26 +62,50 @@ _wip_lock_file() {
 }
 
 # Read state file (returns JSON)
+# Note: For atomic read-modify-write, use _wip_atomic_update instead
 _wip_read_state() {
   _wip_ensure_state_file
   cat "$OCDC_WIP_STATE_FILE"
 }
 
 # Write state file (expects JSON on stdin or as arg)
+# Note: For atomic read-modify-write, use _wip_atomic_update instead
 _wip_write_state() {
   local new_state="${1:-$(cat)}"
+  echo "$new_state" > "$OCDC_WIP_STATE_FILE"
+}
+
+# Atomic read-modify-write operation
+# Usage: _wip_atomic_update <jq_filter> [jq_args...]
+# Acquires lock, reads state, applies jq filter, writes state, releases lock
+_wip_atomic_update() {
+  local jq_filter="$1"
+  shift
   
-  local lock_file
-  lock_file=$(_wip_lock_file)
+  _wip_ensure_state_file
   
+  local lock_file_path
+  lock_file_path=$(_wip_lock_file)
+  
+  # Acquire lock if lock_file function is available
   if type lock_file &>/dev/null; then
-    lock_file "$lock_file"
+    lock_file "$lock_file_path"
   fi
   
+  # Read current state
+  local state
+  state=$(cat "$OCDC_WIP_STATE_FILE")
+  
+  # Apply transformation
+  local new_state
+  new_state=$(echo "$state" | jq "$@" "$jq_filter")
+  
+  # Write new state
   echo "$new_state" > "$OCDC_WIP_STATE_FILE"
   
+  # Release lock
   if type unlock_file &>/dev/null; then
-    unlock_file "$lock_file"
+    unlock_file "$lock_file_path"
   fi
 }
 
@@ -96,27 +120,19 @@ wip_add_session() {
   local repo_key="$2"
   local priority="${3:-medium}"
   
-  _wip_ensure_state_file
-  
   local started_at
   started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   
-  local state
-  state=$(_wip_read_state)
-  
-  local new_state
-  new_state=$(echo "$state" | jq \
-    --arg key "$key" \
-    --arg repo_key "$repo_key" \
-    --arg priority "$priority" \
-    --arg started_at "$started_at" \
+  _wip_atomic_update \
     '.sessions[$key] = {
       repo_key: $repo_key,
       priority: $priority,
       started_at: $started_at
-    }')
-  
-  _wip_write_state "$new_state"
+    }' \
+    --arg key "$key" \
+    --arg repo_key "$repo_key" \
+    --arg priority "$priority" \
+    --arg started_at "$started_at"
 }
 
 # Remove a WIP session
@@ -124,15 +140,7 @@ wip_add_session() {
 wip_remove_session() {
   local key="$1"
   
-  _wip_ensure_state_file
-  
-  local state
-  state=$(_wip_read_state)
-  
-  local new_state
-  new_state=$(echo "$state" | jq --arg key "$key" 'del(.sessions[$key])')
-  
-  _wip_write_state "$new_state"
+  _wip_atomic_update 'del(.sessions[$key])' --arg key "$key"
 }
 
 # Check if a session is active

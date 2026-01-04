@@ -84,15 +84,15 @@ _DEPENDENCY_PATTERNS=(
 )
 
 # Check if issue body has unchecked task list items (GitHub checkbox syntax)
-# Returns: 0 if no unchecked items or no checklist, 1 if has unchecked items
+# Returns: 0 (true) if has unchecked items, 1 (false) if no unchecked items
 _has_unchecked_tasks() {
   local body="$1"
   
   # Look for unchecked checkboxes: - [ ] or * [ ]
   if echo "$body" | grep -qE '^\s*[-*]\s*\[ \]'; then
-    return 0  # Has unchecked tasks
+    return 0  # Has unchecked tasks (true for shell if)
   fi
-  return 1  # No unchecked tasks
+  return 1  # No unchecked tasks (false for shell if)
 }
 
 # Check if issue has dependency references in body
@@ -194,8 +194,9 @@ readiness_calculate_priority() {
   done < <(echo "$priority_labels" | jq -c '.[]')
   
   # Calculate age bonus (days since creation * weight)
+  # Handle both snake_case (tests) and camelCase (gh CLI) field names
   local created_at
-  created_at=$(echo "$issue_json" | jq -r '.created_at // empty')
+  created_at=$(echo "$issue_json" | jq -r '.created_at // .createdAt // empty')
   
   local age_bonus=0
   if [[ -n "$created_at" ]]; then
@@ -224,8 +225,13 @@ readiness_calculate_priority() {
     fi
     
     # Reactions boost: issues with positive reactions have community interest
+    # Handle both REST API format (.reactions."+1") and gh CLI format (.reactionGroups)
     local reactions
-    reactions=$(echo "$issue_json" | jq -r '.reactions."+1" // 0')
+    reactions=$(echo "$issue_json" | jq -r '
+      if .reactions then .reactions."+1" // .reactions.THUMBS_UP // 0
+      elif .reactionGroups then [.reactionGroups[] | select(.content == "THUMBS_UP") | .users.totalCount // 0] | add // 0
+      else 0 end
+    ')
     if [[ "$reactions" -gt 0 ]]; then
       # Cap at 30 points (prevents gaming)
       local reaction_bonus=$((reactions * 5))
@@ -234,8 +240,12 @@ readiness_calculate_priority() {
     fi
     
     # Comment count boost: more discussion = more important
+    # Handle both integer (REST API) and array (gh CLI) formats
     local comments
-    comments=$(echo "$issue_json" | jq -r '.comments // 0')
+    comments=$(echo "$issue_json" | jq -r '
+      if .comments | type == "array" then .comments | length
+      else .comments // 0 end
+    ')
     if [[ "$comments" -gt 0 ]]; then
       # Cap at 20 points
       local comment_bonus=$((comments * 2))

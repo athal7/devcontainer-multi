@@ -29,17 +29,13 @@
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["github", "linear"],
+              "enum": ["github"],
               "default": "github",
-              "description": "Type of issue tracker"
+              "description": "Type of issue tracker (currently only github supported)"
             },
             "repo": {
               "type": "string",
-              "description": "Repository identifier (owner/repo for GitHub, team key for Linear)"
-            },
-            "team": {
-              "type": "string",
-              "description": "Linear team key (for linear type)"
+              "description": "Repository identifier (owner/repo for GitHub)"
             }
           }
         },
