@@ -38,14 +38,14 @@ jobs:
 
       - name: Setup opencode plugin
         run: |
-          mkdir -p ~/.config/opencode/plugins/ocdc/command
-          cp plugin/index.js plugin/helpers.js ~/.config/opencode/plugins/ocdc/
-          cp plugin/command/ocdc.md ~/.config/opencode/plugins/ocdc/command/
+          mkdir -p ~/.config/opencode/plugins/opencode-devcontainers/command
+          cp plugin/index.js plugin/helpers.js ~/.config/opencode/plugins/opencode-devcontainers/
+          cp plugin/command/devcontainer.md ~/.config/opencode/plugins/opencode-devcontainers/command/
           mkdir -p ~/.config/opencode
           cat > ~/.config/opencode/opencode.json << 'EOF'
           {
             "model": "opencode/gpt-5-nano",
-            "plugin": ["/home/runner/.config/opencode/plugins/ocdc"]
+            "plugin": ["/home/runner/.config/opencode/plugins/opencode-devcontainers"]
           }
           EOF
 
@@ -96,7 +96,7 @@ jobs:
       - name: Update Homebrew formula
         uses: mislav/bump-homebrew-formula-action@v3
         with:
-          formula-name: ocdc
+          formula-name: opencode-devcontainers
           homebrew-tap: athal7/homebrew-tap
           tag-name: v${{ needs.release.outputs.new_release_version }}
           push-to: athal7/homebrew-tap

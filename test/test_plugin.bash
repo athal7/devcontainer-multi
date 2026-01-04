@@ -59,7 +59,7 @@ run_node() {
 test_plugin_files_exist() {
   [[ -f "$PLUGIN_DIR/index.js" ]] || { echo "index.js missing"; return 1; }
   [[ -f "$PLUGIN_DIR/helpers.js" ]] || { echo "helpers.js missing"; return 1; }
-  [[ -f "$PLUGIN_DIR/command/ocdc.md" ]] || { echo "command/ocdc.md missing"; return 1; }
+  [[ -f "$PLUGIN_DIR/command/devcontainer.md" ]] || { echo "command/devcontainer.md missing"; return 1; }
   return 0
 }
 
@@ -84,9 +84,9 @@ test_plugin_exports_ocdc_function() {
 }
 
 test_command_file_has_correct_name() {
-  local name=$(grep "^name:" "$PLUGIN_DIR/command/ocdc.md" | sed 's/name: *//')
-  if [[ "$name" != "ocdc" ]]; then
-    echo "Command name should be 'ocdc', got: $name"
+  local name=$(grep "^name:" "$PLUGIN_DIR/command/devcontainer.md" | sed 's/name: *//')
+  if [[ "$name" != "devcontainer" ]]; then
+    echo "Command name should be 'devcontainer', got: $name"
     return 1
   fi
   return 0
@@ -1638,8 +1638,8 @@ test_opencode_slash_command_exists() {
   
   setup_integration_env
   
-  # Check that /ocdc command file is installed
-  local cmd_file="$HOME/.config/opencode/command/ocdc.md"
+  # Check that /devcontainer command file is installed
+  local cmd_file="$HOME/.config/opencode/command/devcontainer.md"
   if [[ ! -f "$cmd_file" ]]; then
     # Plugin should install it on first run, so run opencode once
     run_opencode "Say hello" 30 >/dev/null 2>&1 || true
