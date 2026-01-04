@@ -13,6 +13,7 @@
 #   ocdc up <branch>           # Create clone for branch, start devcontainer
 #   ocdc up --remove-existing  # Rebuild container from scratch
 #   ocdc up --no-open          # Don't open VS Code (just start container)
+#   ocdc up --json             # Output JSON for machine parsing
 #
 # Examples:
 #   cd ~/Projects/myapp && ocdc up              # Start on port 13000
@@ -49,6 +50,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/ocdc-paths.bash"
 source "${SCRIPT_DIR}/../lib/ocdc-file-lock.bash"
+source "${SCRIPT_DIR}/../lib/ocdc-json.bash"
 
 # Run migration on first use
 ocdc_migrate_paths
@@ -70,6 +72,7 @@ DEFAULT_PORT_END=13099
 BRANCH=""
 REMOVE_EXISTING=false
 NO_OPEN=false
+JSON_OUTPUT=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -81,13 +84,17 @@ while [[ $# -gt 0 ]]; do
       NO_OPEN=true
       shift
       ;;
+    --json|-j)
+      JSON_OUTPUT=true
+      shift
+      ;;
     --help|-h)
       sed -n '2,/^$/p' "$0" | sed 's/^# //' | sed 's/^#//'
       exit 0
       ;;
     -*)
       echo "Unknown option: $1" >&2
-      exit 1
+      exit $EXIT_INVALID_ARGS
       ;;
     *)
       BRANCH="$1"
@@ -108,14 +115,24 @@ ocdc_ensure_dirs
 PORT_START=$(jq -r ".portRangeStart // $DEFAULT_PORT_START" "$CONFIG_FILE")
 PORT_END=$(jq -r ".portRangeEnd // $DEFAULT_PORT_END" "$CONFIG_FILE")
 
-log() { echo "[ocdc-up] $*"; }
-error() { echo "[ocdc-up] ERROR: $*" >&2; exit 1; }
+log() { log_json_aware "ocdc-up" "$*"; }
+error() {
+  local msg="$1"
+  local code="${2:-$EXIT_ERROR}"
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    json_error "$msg" "$code"
+    exit "$code"
+  else
+    echo "[ocdc-up] ERROR: $msg" >&2
+    exit "$code"
+  fi
+}
 
 # Check for devcontainer CLI
-command -v devcontainer >/dev/null 2>&1 || error "devcontainer CLI not found. Install with: npm install -g @devcontainers/cli"
+command -v devcontainer >/dev/null 2>&1 || error "devcontainer CLI not found. Install with: npm install -g @devcontainers/cli" $EXIT_ERROR
 
 # Check we're in a git repo
-git rev-parse --git-dir >/dev/null 2>&1 || error "Not in a git repository"
+git rev-parse --git-dir >/dev/null 2>&1 || error "Not in a git repository" $EXIT_INVALID_ARGS
 
 # Get repo info (resolve symlinks for consistent workspace paths)
 REPO_ROOT=$(ocdc_resolve_path "$(git rev-parse --show-toplevel)")
@@ -246,7 +263,7 @@ fi
 
 # Check for devcontainer.json
 if [[ ! -f "$WORKSPACE/.devcontainer/devcontainer.json" ]] && [[ ! -f "$WORKSPACE/.devcontainer.json" ]]; then
-  error "No devcontainer.json found in $WORKSPACE"
+  error "No devcontainer.json found in $WORKSPACE" $EXIT_NOT_FOUND
 fi
 
 # Generate workspace identifier (hash of absolute path)
@@ -265,7 +282,7 @@ find_available_port() {
       fi
     fi
   done
-  error "No available ports in range $PORT_START-$PORT_END. Use 'ocdc down' to stop unused instances or 'ocdc list' to see active ones."
+  error "No available ports in range $PORT_START-$PORT_END. Use 'ocdc down' to stop unused instances or 'ocdc list' to see active ones." $EXIT_ERROR
 }
 
 # Get or assign port for this workspace
@@ -363,34 +380,61 @@ fi
 log "Starting devcontainer..."
 echo ""
 
-# Run devcontainer up
-if devcontainer up "${UP_ARGS[@]}"; then
-  echo ""
-  log "Devcontainer started successfully!"
-  log "Access your app at: http://localhost:$PORT"
-  echo ""
-  
-  # Open in VS Code if requested (not --no-open) and in VS Code terminal
-  if [[ "$NO_OPEN" != "true" ]] && is_vscode_terminal; then
-    log "Opening in VS Code devcontainer..."
-    # Encode local workspace path as hex for vscode-remote URI
-    HEX_PATH=$(printf '%s' "$WORKSPACE" | xxd -p -c 256 | tr -d '\n')
-    code --folder-uri "vscode-remote://dev-container+${HEX_PATH}${WORKSPACE_FOLDER}"
-  elif [[ -n "$BRANCH" ]]; then
-    # For clones in non-VS Code terminals, show navigation help
+# Capture devcontainer output for JSON mode
+DEVCONTAINER_OUTPUT=""
+DEVCONTAINER_EXIT=0
+
+if [[ "$JSON_OUTPUT" == "true" ]]; then
+  DEVCONTAINER_OUTPUT=$(devcontainer up "${UP_ARGS[@]}" 2>&1) || DEVCONTAINER_EXIT=$?
+else
+  devcontainer up "${UP_ARGS[@]}" || DEVCONTAINER_EXIT=$?
+fi
+
+# Get container ID if available (parse from devcontainer JSON output)
+CONTAINER_ID=""
+if [[ -n "$DEVCONTAINER_OUTPUT" ]]; then
+  # devcontainer up outputs JSON with containerId field
+  CONTAINER_ID=$(echo "$DEVCONTAINER_OUTPUT" | jq -r '.containerId // empty' 2>/dev/null || true)
+fi
+
+if [[ $DEVCONTAINER_EXIT -eq 0 ]]; then
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    # Output JSON success response
+    jq -n \
+      --arg workspace "$WORKSPACE" \
+      --argjson port "$PORT" \
+      --arg container_id "$CONTAINER_ID" \
+      --arg repo "$REPO_NAME" \
+      --arg branch "${BRANCH:-$(git -C "$WORKSPACE" branch --show-current 2>/dev/null || echo 'main')}" \
+      '{workspace: $workspace, port: $port, container_id: $container_id, repo: $repo, branch: $branch}'
+  else
     echo ""
-    log "To navigate to the clone:"
-    echo "  cd $WORKSPACE"
+    log "Devcontainer started successfully!"
+    log "Access your app at: http://localhost:$PORT"
     echo ""
-    log "Or use: ocdc go $BRANCH"
+    
+    # Open in VS Code if requested (not --no-open) and in VS Code terminal
+    if [[ "$NO_OPEN" != "true" ]] && is_vscode_terminal; then
+      log "Opening in VS Code devcontainer..."
+      # Encode local workspace path as hex for vscode-remote URI
+      HEX_PATH=$(printf '%s' "$WORKSPACE" | xxd -p -c 256 | tr -d '\n')
+      code --folder-uri "vscode-remote://dev-container+${HEX_PATH}${WORKSPACE_FOLDER}"
+    elif [[ -n "$BRANCH" ]]; then
+      # For clones in non-VS Code terminals, show navigation help
+      echo ""
+      log "To navigate to the clone:"
+      echo "  cd $WORKSPACE"
+      echo ""
+      log "Or use: ocdc go $BRANCH"
+    fi
+    
+    echo ""
+    log "Useful commands:"
+    log "  ocdc exec <cmd>     - Execute command in container"
+    log "  ocdc down           - Stop this container"
+    log "  ocdc list           - List all instances"
+    [[ -n "$BRANCH" ]] && log "  ocdc go $BRANCH     - Navigate to this clone"
   fi
-  
-  echo ""
-  log "Useful commands:"
-  log "  ocdc exec <cmd>     - Execute command in container"
-  log "  ocdc down           - Stop this container"
-  log "  ocdc list           - List all instances"
-  [[ -n "$BRANCH" ]] && log "  ocdc go $BRANCH     - Navigate to this clone"
 else
   # Clean up port assignment on failure (with lock to prevent race conditions)
   lock_file "$PORTS_LOCK"
@@ -399,5 +443,5 @@ else
   { jq --arg ws "$WORKSPACE" 'del(.[$ws])' "$PORTS_FILE" > "$tmp" && mv "$tmp" "$PORTS_FILE"; } || true
   rm -f "$tmp" 2>/dev/null || true
   unlock_file "$PORTS_LOCK"
-  error "Failed to start devcontainer"
+  error "Failed to start devcontainer" $EXIT_ERROR
 fi

@@ -7,15 +7,18 @@
 #   ocdc exec --repo <repo> <branch> -- <command> [args...]  # Specify repo
 #   ocdc exec -- <command> [args...]            # Run in current workspace
 #   ocdc exec --workspace <path> -- <command> [args...]  # Explicit path
+#   ocdc exec --json -- <command> [args...]     # Output JSON for machine parsing
 #
 # Examples:
 #   ocdc exec feature-x -- bin/dev        # Run in feature-x branch workspace
 #   ocdc exec --repo myapp main -- bash   # Run in myapp/main workspace
 #   ocdc exec -- npm test                 # Run in current directory's workspace
+#   ocdc exec --json -- npm test          # Run and return JSON result
 #
 # Options:
 #   --repo, -r <repo>      Specify repository (for disambiguation)
 #   --workspace, -w <path> Specify workspace path directly (takes precedence)
+#   --json, -j             Output JSON with stdout, stderr, and exit code
 #
 # Related commands:
 #   ocdc up     - Start devcontainer
@@ -28,12 +31,25 @@ set -euo pipefail
 # Source paths library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/ocdc-paths.bash"
+source "${SCRIPT_DIR}/../lib/ocdc-json.bash"
 
 CACHE_DIR="$OCDC_CACHE_DIR"
 PORTS_FILE="$OCDC_PORTS_FILE"
 OVERRIDES_DIR="$OCDC_OVERRIDES_DIR"
 
-error() { echo "[ocdc-exec] ERROR: $*" >&2; exit 1; }
+JSON_OUTPUT=false
+
+error() {
+  local msg="$1"
+  local code="${2:-$EXIT_ERROR}"
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    json_error "$msg" "$code"
+    exit "$code"
+  else
+    echo "[ocdc-exec] ERROR: $msg" >&2
+    exit "$code"
+  fi
+}
 
 # Parse arguments
 # Two modes:
@@ -56,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       REPO="$2"
       shift 2
       ;;
+    --json|-j)
+      JSON_OUTPUT=true
+      shift
+      ;;
     --help|-h)
       sed -n '2,/^$/p' "$0" | sed 's/^# //' | sed 's/^#//'
       exit 0
@@ -67,7 +87,7 @@ while [[ $# -gt 0 ]]; do
       break
       ;;
     -*)
-      error "Unknown option: $1"
+      error "Unknown option: $1" $EXIT_INVALID_ARGS
       ;;
     *)
       # Collect non-option args before --
@@ -91,7 +111,7 @@ else
   CMD_ARGS=("${PRE_SEPARATOR_ARGS[@]}")
 fi
 
-[[ ${#CMD_ARGS[@]} -gt 0 ]] || error "No command specified. Usage: ocdc exec <branch> -- <command>"
+[[ ${#CMD_ARGS[@]} -gt 0 ]] || error "No command specified. Usage: ocdc exec <branch> -- <command>" $EXIT_INVALID_ARGS
 
 # Determine workspace
 if [[ -n "$WORKSPACE" ]]; then
@@ -99,7 +119,7 @@ if [[ -n "$WORKSPACE" ]]; then
   WORKSPACE=$(ocdc_resolve_path "$WORKSPACE")
 elif [[ -n "$IDENTIFIER" ]]; then
   # Resolve identifier to workspace
-  WORKSPACE=$(ocdc_resolve_identifier "$IDENTIFIER" "$REPO") || exit 1
+  WORKSPACE=$(ocdc_resolve_identifier "$IDENTIFIER" "$REPO") || exit $EXIT_NOT_FOUND
 else
   # Fall back to current directory / git root
   if git rev-parse --git-dir >/dev/null 2>&1; then
@@ -112,7 +132,7 @@ fi
 
 # Check if workspace is tracked
 if ! jq -e --arg ws "$WORKSPACE" '.[$ws]' "$PORTS_FILE" >/dev/null 2>&1; then
-  error "No devcontainer tracked for: $WORKSPACE\nUse 'ocdc up' to start one."
+  error "No devcontainer tracked for: $WORKSPACE\nUse 'ocdc up' to start one." $EXIT_NOT_FOUND
 fi
 
 # Get workspace ID for override file
@@ -127,4 +147,27 @@ if [[ -f "$OVERRIDE_FILE" ]]; then
 fi
 
 # Execute
-exec devcontainer exec "${EXEC_ARGS[@]}" "${CMD_ARGS[@]}"
+if [[ "$JSON_OUTPUT" == "true" ]]; then
+  # Capture stdout, stderr, and exit code
+  STDOUT_FILE=$(mktemp)
+  STDERR_FILE=$(mktemp)
+  
+  EXEC_EXIT=0
+  devcontainer exec "${EXEC_ARGS[@]}" "${CMD_ARGS[@]}" >"$STDOUT_FILE" 2>"$STDERR_FILE" || EXEC_EXIT=$?
+  
+  STDOUT_CONTENT=$(cat "$STDOUT_FILE")
+  STDERR_CONTENT=$(cat "$STDERR_FILE")
+  
+  rm -f "$STDOUT_FILE" "$STDERR_FILE"
+  
+  # Output JSON result
+  jq -n \
+    --arg stdout "$STDOUT_CONTENT" \
+    --arg stderr "$STDERR_CONTENT" \
+    --argjson code "$EXEC_EXIT" \
+    '{stdout: $stdout, stderr: $stderr, code: $code}'
+  
+  exit $EXEC_EXIT
+else
+  exec devcontainer exec "${EXEC_ARGS[@]}" "${CMD_ARGS[@]}"
+fi

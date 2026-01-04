@@ -7,6 +7,7 @@
 #   ocdc down <workspace>  # Stop container for specific workspace path
 #   ocdc down --all        # Stop all tracked devcontainers
 #   ocdc down --prune      # Remove stale port assignments (no running container)
+#   ocdc down --json       # Output JSON for machine parsing
 #
 # Options:
 #   --remove-clone      Also remove the clone directory (if applicable)
@@ -21,6 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/ocdc-paths.bash"
 source "${SCRIPT_DIR}/../lib/ocdc-file-lock.bash"
+source "${SCRIPT_DIR}/../lib/ocdc-json.bash"
 
 CACHE_DIR="$OCDC_CACHE_DIR"
 PORTS_FILE="$OCDC_PORTS_FILE"
@@ -28,14 +30,12 @@ PORTS_LOCK="${CACHE_DIR}/ports.lock"
 OVERRIDES_DIR="$OCDC_OVERRIDES_DIR"
 CLONES_DIR="$OCDC_CLONES_DIR"
 
-log() { echo "[ocdc-down] $*"; }
-error() { echo "[ocdc-down] ERROR: $*" >&2; exit 1; }
-
 # Parse arguments first (for --help)
 WORKSPACE=""
 ALL=false
 PRUNE=false
 REMOVE_CLONE=false
+JSON_OUTPUT=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,13 +51,17 @@ while [[ $# -gt 0 ]]; do
       REMOVE_CLONE=true
       shift
       ;;
+    --json|-j)
+      JSON_OUTPUT=true
+      shift
+      ;;
     --help|-h)
       sed -n '2,/^$/p' "$0" | sed 's/^# //' | sed 's/^#//'
       exit 0
       ;;
     -*)
       echo "Unknown option: $1" >&2
-      exit 1
+      exit $EXIT_INVALID_ARGS
       ;;
     *)
       WORKSPACE="$1"
@@ -66,16 +70,42 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Check for ports file after parsing args
-[[ -f "$PORTS_FILE" ]] || { echo "No active devcontainer instances found."; exit 0; }
+log() { log_json_aware "ocdc-down" "$*"; }
+error() {
+  local msg="$1"
+  local code="${2:-$EXIT_ERROR}"
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    json_error "$msg" "$code"
+    exit "$code"
+  else
+    echo "[ocdc-down] ERROR: $msg" >&2
+    exit "$code"
+  fi
+}
 
-# Stop a single container
+# Check for ports file after parsing args
+if [[ ! -f "$PORTS_FILE" ]]; then
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    echo '{"success": true, "message": "No active devcontainer instances found."}'
+  else
+    echo "No active devcontainer instances found."
+  fi
+  exit 0
+fi
+
+# Stop a single container (returns JSON result if called with json_mode=true)
+# Usage: stop_container <workspace> [json_mode]
 stop_container() {
   local ws="$1"
+  local json_mode="${2:-false}"
   local info=$(jq -r --arg ws "$ws" '.[$ws] // empty' "$PORTS_FILE")
   
   if [[ -z "$info" ]]; then
-    log "No tracked instance for: $ws"
+    if [[ "$json_mode" == "true" ]]; then
+      echo '{"success": false, "error": "No tracked instance", "workspace": "'"$ws"'"}'
+    else
+      log "No tracked instance for: $ws"
+    fi
     return 1
   fi
   
@@ -117,12 +147,21 @@ stop_container() {
       rm -rf "$ws"
     fi
   fi
+  
+  if [[ "$json_mode" == "true" ]]; then
+    jq -n \
+      --arg workspace "$ws" \
+      --argjson port "$port" \
+      --arg repo "$repo" \
+      '{success: true, workspace: $workspace, port: $port, repo: $repo}'
+  fi
 }
 
 # Prune stale entries (no running container)
 prune_stale() {
   log "Pruning stale port assignments..."
   local pruned=0
+  local results="[]"
   
   for ws in $(jq -r 'keys[]' "$PORTS_FILE"); do
     local port=$(jq -r --arg ws "$ws" '.[$ws].port' "$PORTS_FILE")
@@ -141,11 +180,19 @@ prune_stale() {
       local ws_id=$(ocdc_path_id "$ws")
       rm -f "${OVERRIDES_DIR}/${ws_id}.json"
       
+      if [[ "$JSON_OUTPUT" == "true" ]]; then
+        results=$(echo "$results" | jq --arg ws "$ws" --argjson port "$port" '. + [{workspace: $ws, port: $port, pruned: true}]')
+      fi
+      
       ((pruned++)) || true
     fi
   done
   
   log "Pruned $pruned stale assignments"
+  
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    jq -n --argjson count "$pruned" --argjson items "$results" '{success: true, pruned: $count, items: $items}'
+  fi
 }
 
 if [[ "$PRUNE" == "true" ]]; then
@@ -155,9 +202,20 @@ fi
 
 if [[ "$ALL" == "true" ]]; then
   log "Stopping all tracked containers..."
+  results="[]"
   for ws in $(jq -r 'keys[]' "$PORTS_FILE"); do
-    stop_container "$ws" || true
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      result=$(stop_container "$ws" "true") || true
+      if [[ -n "$result" ]]; then
+        results=$(echo "$results" "[$result]" | jq -s 'add')
+      fi
+    else
+      stop_container "$ws" || true
+    fi
   done
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    echo "$results"
+  fi
   exit 0
 fi
 
@@ -174,4 +232,19 @@ fi
 # Resolve to absolute path with symlinks resolved
 WORKSPACE=$(ocdc_resolve_path "$WORKSPACE")
 
-stop_container "$WORKSPACE"
+# Check if workspace is tracked
+if ! jq -e --arg ws "$WORKSPACE" '.[$ws]' "$PORTS_FILE" >/dev/null 2>&1; then
+  error "No tracked instance for: $WORKSPACE" $EXIT_NOT_FOUND
+fi
+
+if [[ "$JSON_OUTPUT" == "true" ]]; then
+  result=$(stop_container "$WORKSPACE" "true")
+  if [[ $? -eq 0 ]]; then
+    echo "$result"
+  else
+    echo "$result"
+    exit $EXIT_NOT_FOUND
+  fi
+else
+  stop_container "$WORKSPACE"
+fi

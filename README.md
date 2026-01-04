@@ -58,6 +58,28 @@ ocdc down --all         # Stop all
 ocdc clean              # Remove orphaned clones
 ```
 
+### JSON Output
+
+All commands support `--json` for machine-readable output:
+
+```bash
+ocdc up feature-x --json --no-open
+# {"workspace": "...", "port": 13001, "container_id": "...", "repo": "...", "branch": "feature-x"}
+
+ocdc down --json
+# {"success": true, "workspace": "...", "port": 13001, "repo": "..."}
+
+ocdc exec --json -- npm test
+# {"stdout": "...", "stderr": "...", "code": 0}
+
+ocdc list --json
+# [{"workspace": "...", "port": 13001, "repo": "...", "branch": "...", "status": "up"}]
+```
+
+Exit codes are standardized: 0=success, 1=error, 2=invalid args, 3=not found.
+
+See [docs/CLI-INTERFACE.md](docs/CLI-INTERFACE.md) for full API documentation.
+
 ## Configuration
 
 `~/.config/ocdc/config.json`:
