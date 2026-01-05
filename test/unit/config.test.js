@@ -190,6 +190,21 @@ describe('generateOverrideConfig', () => {
     assert.ok(Array.isArray(override.runArgs))
     assert.ok(override.runArgs.includes('-p'))
   })
+
+  test('removes forwardPorts to prevent double port forwarding', async () => {
+    // devcontainer CLI would set up its own port forwarding via forwardPorts,
+    // which would conflict with our explicit -p in runArgs
+    const workspace = join(testDir, 'workspace')
+    const overridePath = await generateOverrideConfig(workspace, 13006)
+    
+    const override = JSON.parse(readFileSync(overridePath, 'utf-8'))
+    
+    // forwardPorts should not be in the override config
+    assert.strictEqual(override.forwardPorts, undefined)
+    // Our explicit port mapping should be present
+    assert.ok(override.runArgs.includes('-p'))
+    assert.ok(override.runArgs.includes('13006:3000'))
+  })
 })
 
 describe('loadUserConfig', () => {

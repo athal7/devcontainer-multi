@@ -11,6 +11,7 @@ import { join } from 'path'
 import { mkdir, rmdir, readFile, writeFile, stat } from 'fs/promises'
 import { existsSync } from 'fs'
 import { createServer } from 'net'
+import { spawn } from 'child_process'
 import { PATHS } from './paths.js'
 
 /**
@@ -214,6 +215,127 @@ export async function listPorts() {
   return readPorts()
 }
 
+/**
+ * Run a command and return a promise with the result
+ * 
+ * @param {string} cmd - Command to run
+ * @param {string[]} args - Arguments
+ * @returns {Promise<{stdout: string, stderr: string, exitCode: number, success: boolean}>}
+ */
+async function runCommand(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', data => {
+      stdout += data.toString()
+    })
+
+    child.stderr.on('data', data => {
+      stderr += data.toString()
+    })
+
+    child.on('close', exitCode => {
+      resolve({
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        exitCode,
+        success: exitCode === 0,
+      })
+    })
+
+    child.on('error', reject)
+  })
+}
+
+/**
+ * Get the actual host port a container is listening on for a workspace
+ * 
+ * Queries Docker to find the container with the devcontainer.local_folder label
+ * matching the workspace path, then extracts the host port from its port mappings.
+ * 
+ * @param {string} workspace - Absolute path to workspace
+ * @returns {Promise<number|null>} Host port or null if container not found
+ */
+export async function getContainerPort(workspace) {
+  try {
+    // Find container with matching workspace label
+    const result = await runCommand('docker', [
+      'ps',
+      '--filter', `label=devcontainer.local_folder=${workspace}`,
+      '--format', '{{.ID}}',
+    ])
+
+    if (!result.success || !result.stdout) {
+      return null
+    }
+
+    const containerId = result.stdout.split('\n')[0].trim()
+    if (!containerId) {
+      return null
+    }
+
+    // Get port mappings from container
+    const inspectResult = await runCommand('docker', [
+      'inspect',
+      '--format', '{{json .NetworkSettings.Ports}}',
+      containerId,
+    ])
+
+    if (!inspectResult.success || !inspectResult.stdout) {
+      return null
+    }
+
+    // Parse the port mappings JSON
+    // Format: {"3000/tcp":[{"HostIp":"0.0.0.0","HostPort":"13043"}]}
+    const portMappings = JSON.parse(inspectResult.stdout)
+    
+    // Find the first host port mapping
+    for (const [, bindings] of Object.entries(portMappings)) {
+      if (Array.isArray(bindings) && bindings.length > 0) {
+        const hostPort = parseInt(bindings[0].HostPort, 10)
+        if (!isNaN(hostPort)) {
+          return hostPort
+        }
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Update the port allocation for a workspace
+ * 
+ * Used when the actual container port differs from the allocated port.
+ * Only updates if the workspace already has an allocation.
+ * 
+ * @param {string} workspace - Absolute path to workspace
+ * @param {number} actualPort - The actual port the container is running on
+ * @returns {Promise<void>}
+ */
+export async function updatePortAllocation(workspace, actualPort) {
+  const lockPath = join(PATHS.cache, 'ports')
+
+  return withLock(lockPath, async () => {
+    const ports = await readPorts()
+    
+    // Only update if workspace has an existing allocation
+    if (!ports[workspace]) {
+      return
+    }
+
+    ports[workspace].port = actualPort
+    await writePorts(ports)
+  })
+}
+
 export default {
   withLock,
   readPorts,
@@ -222,4 +344,6 @@ export default {
   allocatePort,
   releasePort,
   listPorts,
+  getContainerPort,
+  updatePortAllocation,
 }

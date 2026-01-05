@@ -165,12 +165,15 @@ export async function generateOverrideConfig(workspace, port) {
   const workspaceName = basename(workspace)
 
   // Build override config
+  // Remove forwardPorts and appPort to prevent devcontainer CLI from setting up
+  // its own port forwarding which would conflict with our explicit -p in runArgs
+  const { forwardPorts, appPort, ...restConfig } = baseConfig
   const override = {
-    ...baseConfig,
+    ...restConfig,
     name: `${workspaceName} (port ${port})`,
     workspaceFolder: `/workspaces/${workspaceName}`,
     runArgs: [
-      ...removePortArgs(baseConfig.runArgs),
+      ...removePortArgs(restConfig.runArgs),
       '-p',
       `${port}:${internalPort}`,
     ],

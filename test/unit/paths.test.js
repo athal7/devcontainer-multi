@@ -30,9 +30,9 @@ describe('PATHS', () => {
     delete process.env.OCDC_CACHE_DIR
     delete process.env.OCDC_CLONES_DIR
     
-    // Re-import to get fresh values (need dynamic import)
-    assert.strictEqual(PATHS.config, join(homedir(), '.config/ocdc'))
-    assert.strictEqual(PATHS.cache, join(homedir(), '.cache/ocdc'))
+    // Getters return default paths when env vars are unset
+    assert.strictEqual(PATHS.config, join(homedir(), '.config/opencode-devcontainers'))
+    assert.strictEqual(PATHS.cache, join(homedir(), '.cache/opencode-devcontainers'))
     assert.strictEqual(PATHS.clones, join(homedir(), '.cache/devcontainer-clones'))
   })
 

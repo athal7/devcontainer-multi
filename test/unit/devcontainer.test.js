@@ -110,6 +110,35 @@ describe('list', () => {
     assert.ok(result.some(r => r.workspace === '/workspace/one'))
     assert.ok(result.some(r => r.workspace === '/workspace/two'))
   })
+
+  test('includes status field for each allocation', async () => {
+    const result = await list()
+    
+    // Since no containers are running, all should be 'down'
+    assert.ok(result.every(r => r.status === 'down'))
+  })
+
+  test('returns down status when container not running', async () => {
+    const result = await list()
+    
+    const workspace = result.find(r => r.workspace === '/workspace/one')
+    assert.strictEqual(workspace.status, 'down')
+    assert.strictEqual(workspace.actualPort, undefined)
+  })
+
+  test('sync option does not break when no containers running', async () => {
+    // This test verifies that list({ sync: true }) works correctly
+    // even when no containers are running (the common case in tests)
+    
+    const result = await list({ sync: true })
+    
+    // With no running containers, status should still be 'down'
+    assert.ok(result.every(r => r.status === 'down'))
+    
+    // ports.json should be unchanged since no containers are running
+    const ports = JSON.parse(readFileSync(join(testDir, 'ports.json'), 'utf-8'))
+    assert.strictEqual(ports['/workspace/one'].port, 13000)
+  })
 })
 
 describe('isContainerRunning', () => {

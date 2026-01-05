@@ -49,6 +49,8 @@ export {
   writePorts,
   isPortFree,
   withLock,
+  getContainerPort,
+  updatePortAllocation,
 } from './ports.js'
 
 // Configuration

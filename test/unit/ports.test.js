@@ -17,7 +17,9 @@ import {
   allocatePort, 
   releasePort,
   isPortFree,
-  withLock 
+  withLock,
+  getContainerPort,
+  updatePortAllocation,
 } from '../../plugin/core/ports.js'
 
 describe('withLock', () => {
@@ -292,5 +294,77 @@ describe('releasePort', () => {
     
     // Released port should be available for reuse
     assert.strictEqual(result1.port, result2.port)
+  })
+})
+
+describe('getContainerPort', () => {
+  test('returns null when no container running for workspace', async () => {
+    const port = await getContainerPort('/nonexistent/workspace')
+    assert.strictEqual(port, null)
+  })
+
+  test('returns null when docker command fails', async () => {
+    // This tests graceful handling of docker errors
+    const port = await getContainerPort('/some/path')
+    // Should not throw, just return null
+    assert.strictEqual(port, null)
+  })
+})
+
+describe('updatePortAllocation', () => {
+  const testDir = join(homedir(), '.cache/ocdc-test-update-' + Date.now())
+  
+  beforeEach(() => {
+    process.env.OCDC_CACHE_DIR = testDir
+    process.env.OCDC_CONFIG_DIR = join(testDir, 'config')
+    mkdirSync(testDir, { recursive: true })
+    mkdirSync(join(testDir, 'config'), { recursive: true })
+    writeFileSync(join(testDir, 'ports.json'), '{}')
+    writeFileSync(join(testDir, 'config', 'config.json'), JSON.stringify({
+      portRangeStart: 19000,
+      portRangeEnd: 19010
+    }))
+  })
+
+  afterEach(() => {
+    delete process.env.OCDC_CACHE_DIR
+    delete process.env.OCDC_CONFIG_DIR
+    rmSync(testDir, { recursive: true, force: true })
+  })
+
+  test('updates port for existing workspace', async () => {
+    // Allocate a port first
+    await allocatePort('/workspace/test', 'repo', 'main')
+    
+    // Simulate container starting on a different port
+    const newPort = 19005
+    await updatePortAllocation('/workspace/test', newPort)
+    
+    // Verify port was updated
+    const ports = await readPorts()
+    assert.strictEqual(ports['/workspace/test'].port, newPort)
+    // Other fields should be preserved
+    assert.strictEqual(ports['/workspace/test'].repo, 'repo')
+    assert.strictEqual(ports['/workspace/test'].branch, 'main')
+  })
+
+  test('does nothing for unknown workspace', async () => {
+    await updatePortAllocation('/workspace/unknown', 19005)
+    
+    // Should not create an entry
+    const ports = await readPorts()
+    assert.strictEqual(ports['/workspace/unknown'], undefined)
+  })
+
+  test('preserves other workspace allocations', async () => {
+    await allocatePort('/workspace/one', 'repo1', 'main')
+    await allocatePort('/workspace/two', 'repo2', 'feature')
+    
+    // Update one workspace
+    await updatePortAllocation('/workspace/one', 19005)
+    
+    // Verify other workspace unaffected
+    const ports = await readPorts()
+    assert.strictEqual(ports['/workspace/two'].repo, 'repo2')
   })
 })

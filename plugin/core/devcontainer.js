@@ -11,7 +11,7 @@
 import { spawn } from 'child_process'
 import { basename } from 'path'
 import { PATHS, ensureDirs } from './paths.js'
-import { allocatePort, releasePort, readPorts } from './ports.js'
+import { allocatePort, releasePort, readPorts, getContainerPort, updatePortAllocation } from './ports.js'
 import { generateOverrideConfig, getOverridePath } from './config.js'
 import { createClone, getClonePath } from './clones.js'
 import { getCurrentBranch, getRepoRoot } from './git.js'
@@ -208,9 +208,25 @@ export async function up(workspaceOrBranch, options = {}) {
     throw new Error(`devcontainer up failed: ${result.stderr}`)
   }
 
+  // Verify actual port after container starts
+  // The container may have started on a different port if there was a race condition
+  // or if an existing container was reused. Retry a few times as container may still
+  // be registering with Docker immediately after devcontainer up returns.
+  let actualPort = port
+  let containerPort = null
+  for (let i = 0; i < 3 && containerPort === null; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 500))
+    containerPort = await getContainerPort(workspace)
+  }
+  if (containerPort !== null && containerPort !== port) {
+    // Container started on a different port - update our tracking
+    await updatePortAllocation(workspace, containerPort)
+    actualPort = containerPort
+  }
+
   return {
     workspace,
-    port,
+    port: actualPort,
     repo: repoName,
     branch,
     stdout: result.stdout,
@@ -263,20 +279,50 @@ export async function down(workspace) {
 }
 
 /**
- * List all port allocations
+ * List all port allocations with live container status
  * 
- * @returns {Promise<Array<{workspace: string, port: number, repo: string, branch: string, started: string}>>}
+ * Returns port allocations with additional status information:
+ * - status: 'up' if container is running on the recorded port, 'down' if not running,
+ *           'mismatch' if container is running but on a different port
+ * - actualPort: the actual port the container is running on (if running)
+ * 
+ * @param {object} [options]
+ * @param {boolean} [options.sync] - If true, auto-sync ports.json when mismatch detected (default: false)
+ * @returns {Promise<Array<{workspace: string, port: number, repo: string, branch: string, started: string, status: string, actualPort?: number}>>}
  */
-export async function list() {
+export async function list(options = {}) {
   const ports = await readPorts()
   
-  return Object.entries(ports).map(([workspace, data]) => ({
-    workspace,
-    port: data.port,
-    repo: data.repo,
-    branch: data.branch,
-    started: data.started,
-  }))
+  const results = await Promise.all(
+    Object.entries(ports).map(async ([workspace, data]) => {
+      const actualPort = await getContainerPort(workspace)
+      let status = 'down'
+      
+      if (actualPort !== null) {
+        if (actualPort === data.port) {
+          status = 'up'
+        } else {
+          status = 'mismatch'
+          // Auto-sync if requested
+          if (options.sync) {
+            await updatePortAllocation(workspace, actualPort)
+          }
+        }
+      }
+      
+      return {
+        workspace,
+        port: options.sync && actualPort !== null ? actualPort : data.port,
+        repo: data.repo,
+        branch: data.branch,
+        started: data.started,
+        status,
+        ...(actualPort !== null && actualPort !== data.port ? { actualPort } : {}),
+      }
+    })
+  )
+  
+  return results
 }
 
 /**
