@@ -259,8 +259,8 @@ describe('fetch', () => {
   beforeEach(async () => {
     mkdirSync(remoteDir, { recursive: true })
     
-    // Create remote repo
-    execSync('git init --bare', { cwd: remoteDir })
+    // Create remote repo with main as default branch
+    execSync('git init --bare --initial-branch=main', { cwd: remoteDir })
     
     // Clone it locally
     execSync(`git clone ${remoteDir} ${localDir}`, { cwd: testDir })
