@@ -22,6 +22,11 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Configure git for tests
+        run: |
+          git config --global user.email "ci@test.local"
+          git config --global user.name "CI Test"
+
       - name: Install dependencies
         run: |
           sudo apt-get update
