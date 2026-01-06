@@ -15,12 +15,7 @@ Before committing changes, verify documentation is updated to reflect code chang
    - Test commands or patterns
    - Release process
 
-3. **skill/ocdc/SKILL.md** - Update if changes affect:
-   - Workflow or best practices
-   - New commands or features
-   - OpenCode integration
-
-4. **plugin/command/devcontainer.md** - Update if changes affect:
+3. **plugin/command/devcontainer.md** - Update if changes affect:
    - Command arguments or behavior
    - Examples
 
