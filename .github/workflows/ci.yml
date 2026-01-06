@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
   id-token: write  # Enable OIDC for npm trusted publishing
+  issues: write    # For semantic-release failure reporting
 
 jobs:
   test:
