@@ -50,7 +50,7 @@ When a devcontainer is targeted:
 
 ## Configuration
 
-`~/.config/ocdc/config.json`:
+`~/.config/opencode/devcontainers/config.json`:
 ```json
 {
   "portRangeStart": 13000,

@@ -24,7 +24,7 @@ function getPath(envVar, defaultPath) {
  */
 export const PATHS = {
   get config() {
-    return getPath('OCDC_CONFIG_DIR', join(homedir(), '.config/opencode-devcontainers'))
+    return getPath('OCDC_CONFIG_DIR', join(homedir(), '.config/opencode/devcontainers'))
   },
   get cache() {
     return getPath('OCDC_CACHE_DIR', join(homedir(), '.cache/opencode-devcontainers'))
