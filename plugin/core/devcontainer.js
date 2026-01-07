@@ -31,6 +31,9 @@ async function runCommand(cmd, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Use SIGKILL for abort to ensure process termination even if SIGTERM is ignored
+      // This is important for the devcontainer CLI which may spawn child processes
+      killSignal: 'SIGKILL',
       ...options,
     })
 
@@ -366,7 +369,8 @@ function runUpInBackground(workspaceOrBranch, workspace, options) {
  * @param {string} workspace - Workspace path
  * @param {string} command - Command to execute
  * @param {object} [options]
- * @param {AbortSignal} [options.signal] - Abort signal
+ * @param {AbortSignal} [options.signal] - Abort signal for cancellation
+ * @param {number} [options.timeout] - Timeout in milliseconds (optional safety net)
  * @returns {Promise<{stdout: string, stderr: string, exitCode: number}>}
  */
 export async function exec(workspace, command, options = {}) {
@@ -379,6 +383,7 @@ export async function exec(workspace, command, options = {}) {
 
   const result = await runCommand('devcontainer', args, {
     signal: options.signal,
+    timeout: options.timeout,
   })
 
   return {

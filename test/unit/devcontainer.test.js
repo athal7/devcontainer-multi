@@ -277,6 +277,32 @@ describe('runCommand abort signal', () => {
       assert.ok(elapsed < 2000, `Should abort quickly, took ${elapsed}ms`)
     }
   })
+
+  test('abort uses SIGKILL to force terminate stubborn processes', async () => {
+    // This test verifies that abort uses SIGKILL (which cannot be ignored)
+    // We use a bash script that traps SIGTERM to simulate a stubborn process
+    // like devcontainer CLI that may not respond to SIGTERM
+    const { runCommand } = await import('../../plugin/core/devcontainer.js')
+    
+    const controller = new AbortController()
+    const startTime = Date.now()
+    
+    // Abort after 300ms (give process time to start and set up trap on slower systems)
+    setTimeout(() => controller.abort(), 300)
+    
+    // Run a command that ignores SIGTERM but cannot ignore SIGKILL
+    // The process echoes "started" then sleeps, ignoring SIGTERM
+    try {
+      await runCommand('bash', ['-c', 'trap "" SIGTERM; echo started; sleep 30'], { signal: controller.signal })
+      assert.fail('Should have thrown AbortError')
+    } catch (err) {
+      const elapsed = Date.now() - startTime
+      assert.strictEqual(err.name, 'AbortError', 'Error should be AbortError')
+      // Should abort within 500ms of the abort signal (200ms + 300ms margin)
+      // If SIGKILL is not used, the process would hang for 30 seconds
+      assert.ok(elapsed < 1000, `Should abort quickly with SIGKILL, took ${elapsed}ms`)
+    }
+  })
   
   test('completed command returns normally without abort', async () => {
     const { runCommand } = await import('../../plugin/core/devcontainer.js')
@@ -286,6 +312,33 @@ describe('runCommand abort signal', () => {
     assert.strictEqual(result.success, true)
     assert.strictEqual(result.stdout, 'hello')
     assert.strictEqual(result.exitCode, 0)
+  })
+
+  test('timeout option terminates long-running commands', async () => {
+    const { runCommand } = await import('../../plugin/core/devcontainer.js')
+    
+    const startTime = Date.now()
+    
+    // Run a command that would take 30 seconds, with 200ms timeout
+    // Node.js spawn timeout kills the process but doesn't throw - it resolves
+    // with non-zero exit code or null exit code (when killed by signal)
+    const result = await runCommand('sleep', ['30'], { timeout: 200 })
+    
+    const elapsed = Date.now() - startTime
+    // Should complete within 500ms (200ms timeout + margin)
+    assert.ok(elapsed < 1000, `Should timeout quickly, took ${elapsed}ms`)
+    // Process was killed by signal, so exitCode is null and success is false
+    assert.strictEqual(result.success, false, 'Should not be successful when killed by timeout')
+  })
+
+  test('timeout does not affect fast commands', async () => {
+    const { runCommand } = await import('../../plugin/core/devcontainer.js')
+    
+    // Fast command with generous timeout should complete normally
+    const result = await runCommand('echo', ['fast'], { timeout: 5000 })
+    
+    assert.strictEqual(result.success, true)
+    assert.strictEqual(result.stdout, 'fast')
   })
 })
 
